@@ -4,7 +4,7 @@
 
 ## ProPicker - Promptable Segmentation
 
-[Repository](https://github.com/MLI-lab/ProPicker)
+[ProPicker Repository](https://github.com/MLI-lab/ProPicker)
 
 ### Documentation
 
