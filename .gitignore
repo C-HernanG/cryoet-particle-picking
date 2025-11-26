@@ -1,2 +1,2 @@
-# Hide tools folder
-tools/
+# Ignore system files
+.DS_Store
