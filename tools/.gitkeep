@@ -1,0 +1,2 @@
+# This file ensures the tools/ directory is tracked by git.
+# The actual tool files are ignored - see README.md for setup instructions.

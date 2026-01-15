@@ -1,0 +1,11 @@
+# Results Directory
+
+This directory contains experiment outputs including:
+- Fine-tuned model checkpoints
+- Inference results and segmentation masks
+- Extracted coordinates
+- Evaluation metrics
+
+Results are organized by experiment:
+- `exp2_empiar10988_finetuning/` - EMPIAR-10988 fine-tuning outputs
+- `exp3_umusynth_thy/` - UMU synthetic thyroglobulin fine-tuning outputs
