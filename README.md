@@ -14,8 +14,8 @@ cryoet-particle-picking/
 ├── docs/                          # Documentation and papers
 ├── experiments/                   # Experiment notebooks and scripts
 │   ├── config.py                  # Configuration and utilities for experiments
-│   ├── empiar10988_base/          # Prompt-based picking on EMPIAR-10988
-│   └── exp1_synth_thy/            # Fine-tuning experiments
+│   ├── exp1_empiar10988_ribo/     # ProPicker fine-tuning on EMPIAR-10988 ribosomes
+│   └── exp2_umusynth_thy/         # ProPicker fine-tuning with UMU synthetic thyroglobulin
 ├── models/                        # Pre-trained models (not tracked by git)
 │   ├── ProPicker/
 │   └── TomoTwin/
@@ -53,17 +53,19 @@ cd cryoet-particle-picking
 
 ### Step 2: Install Required Tools
 
-Clone the necessary external tools into the `tools/` directory. Each tool has its own setup instructions detailed in the [Tools Setup](#tools-setup) section.
+Clone the necessary external tools into the `tools/` directory. Follow the installation instructions from each tool's repository:
+
+- **ProPicker**: <https://github.com/MLI-lab/ProPicker>
 
 ```bash
 cd tools/
-# Clone each required tool (see Tools Setup section for specific commands)
+git clone https://github.com/MLI-lab/ProPicker.git ProPicker
 cd ..
 ```
 
 ### Step 3: Download Pre-trained Models
 
-Download the required model checkpoints following the instructions of each tool. Models can be placed in `models/` for centralized organization.
+Download the required model checkpoints following the instructions from each tool's repository. Models can be placed in `models/` for centralized organization.
 
 ### Step 4: Download Datasets
 
@@ -86,8 +88,8 @@ DATASETS_DIR = DATA_DIR  # or use an absolute path
 EMPIAR10988_BASE_DIR = DATASETS_DIR / "empiar10988"
 
 # Models
-PROPICKER_MODEL_FILE = MODELS_DIR / "ProPicker" / "propicker.ckpt"
-TOMOTWIN_MODEL_FILE = MODELS_DIR / "TomoTwin" / "tomotwin.pth"
+PROPICKER_MODEL_FILE = MODELS_DIR / "propicker.ckpt"
+TOMOTWIN_MODEL_FILE = MODELS_DIR / "tomotwin.pth"
 ```
 
 Experiment parameters (particle sizes, labels, etc.) are in `experiments/config.py`:
@@ -106,63 +108,14 @@ RIBOSOME_DIAMETER = 24
 
 ### Step 6: Create Python Environment
 
-It is recommended to create a separate Python environment for each tool following their specific requirements. See the [Tools Setup](#tools-setup) section for environment setup instructions.
-
----
-
-## Tools Setup
-
-This section contains specific setup instructions for each external tool used in this project.
-
-### ProPicker
-
-[ProPicker](https://github.com/MLI-lab/ProPicker) is a promptable, deep learning-based 3D segmentation model for particle picking in Cryo-ET.
-
-**Key Features:**
-- Zero-shot detection using a single particle prompt
-- Data-efficient fine-tuning
-- ~100M parameter 3D U-Net with FiLM conditioning
-
-#### Installation
-
-```bash
-cd tools/
-git clone https://github.com/MLI-lab/ProPicker.git ProPicker
-cd ProPicker
-```
-
-#### Download Models
-
-```bash
-# Download ProPicker model (from Google Drive link in ProPicker README)
-# Place propicker.ckpt in tools/ProPicker/
-
-# Download TomoTwin encoder
-bash download_tomotwin_ckpt.sh
-```
-
-**Model locations after setup:**
-- `models/ProPicker/propicker.ckpt` - ProPicker segmentation model
-- `models/TomoTwin/tomotwin.pth` - TomoTwin encoder for prompt embeddings
-
-Alternatively, models can be stored in `tools/ProPicker/` and paths updated in `paths.py`.
-
-#### Environment
-
-```bash
-conda env create -f tools/ProPicker/environment.yml
-conda activate propicker
-```
-
-#### Resources
-- [ProPicker Repository](https://github.com/MLI-lab/ProPicker)
-- [ProPicker Paper](docs/ProPicker/ProPicker.pdf)
+It is recommended to create a separate Python environment for each tool following the instructions from their respective repositories.
 
 ---
 
 ## Running Experiments
 
 Each experiment is located in `experiments/<experiment_name>/` and uses two configuration files:
+
 - **`paths.py`**: File system paths (datasets, models, output directories)
 - **`experiments/config.py`**: Experiment parameters (particle sizes, labels, utilities)
 
@@ -196,23 +149,26 @@ from inference import get_pred_locmap_dict
 
 ### Available Experiments
 
-| Experiment | Description | Notebook |
-|------------|-------------|----------|
-| `empiar10988_base` | Prompt-based ribosome picking on EMPIAR-10988 | `PROPICKER_empiar10988_prompt_based_picking.ipynb` |
-| `exp1_synth_thy` | Fine-tuning experiments with synthetic thyroglobulin data | `exp1_synth_thy.ipynb` |
-| `exp2_empiar10988_finetuning` | Fine-tuning ProPicker on EMPIAR-10988 ribosomes | `PROPICKER_empiar10988_fine_tuning.ipynb` |
+| Experiment | Description | Files |
+|------------|-------------|-------|
+| `exp1_empiar10988_ribo` | ProPicker fine-tuning and inference on EMPIAR-10988 ribosomes | `exp1_empiar10988_ribo_ppicker_finetuning.ipynb`<br>`exp1_empiar10988_ribo_ppicker_inference.ipynb` |
+| `exp2_umusynth_thy` | ProPicker fine-tuning with UMU synthetic thyroglobulin data | `exp2_umusynth_thy_ppicker_finetuning.ipynb`<br>`scripts/umusynth_fine_tuning.py`<br>`scripts/umusynth_inference.py`<br>`scripts/update_csv_paths.py` |
 
 ### Configuration Files
 
 #### `paths.py` (Project Root)
+
 Contains all file system paths:
+
 - `PROJECT_ROOT`, `DATA_DIR`, `MODELS_DIR`, `TOOLS_DIR`: Project structure
 - `PROPICKER_MODEL_FILE`, `TOMOTWIN_MODEL_FILE`: Model paths
 - `EMPIAR10988_BASE_DIR`, `UMU_SYNTH_DIR`: Dataset paths
 - `EXP2_*`, `EXP3_*`: Experiment output directories
 
 #### `experiments/config.py`
+
 Contains experiment parameters and utilities:
+
 - `setup_propicker_paths()`: Adds ProPicker tools to `sys.path`
 - `THYROGLOBULIN_*`: Thyroglobulin particle parameters
 - `RIBOSOME_*`: Ribosome particle parameters

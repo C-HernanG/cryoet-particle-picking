@@ -33,22 +33,22 @@ RESULTS_DIR = PROJECT_ROOT / "results"
 DATASETS_DIR = DATA_DIR
 
 # Synthetic datasets
-UMU_SYNTH_DIR = DATASETS_DIR / "umu_synth" / "umu_synth"
+UMU_SYNTH_DIR = DATASETS_DIR / "umu_synth"
 
 # =============================================================================
 # Tools
 # =============================================================================
 
 # ProPicker
-PROPICKER_TOOLS_DIR = TOOLS_DIR / "ProPicker"
+PROPICKER_TOOLS_DIR = TOOLS_DIR / "ProPicker" / "propicker"
 
 # =============================================================================
 # Models
 # =============================================================================
 
 # ProPicker models
-PROPICKER_MODEL_FILE = MODELS_DIR / "ProPicker" / "propicker.ckpt"
-TOMOTWIN_MODEL_FILE = MODELS_DIR / "TomoTwin" / "tomotwin.pth"
+PROPICKER_MODEL_FILE = MODELS_DIR / "propicker.ckpt"
+TOMOTWIN_MODEL_FILE = MODELS_DIR / "tomotwin.pth"
 
 # Alternative: models stored in tools directory (uncomment if needed)
 # PROPICKER_MODEL_FILE = PROPICKER_TOOLS_DIR / "propicker.ckpt"
