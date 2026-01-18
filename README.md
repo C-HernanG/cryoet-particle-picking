@@ -1,6 +1,6 @@
 # Universal Deep Learning Detectors for Macromolecule Localization in Cryo-ET
 
-> **Note:** This repository contains experimental implementations and benchmarks. A comprehensive paper documenting these methods and results is currently in development (`docs/CryoET_Particle_Picking.pdf`).
+> **Note:** This repository contains experimental implementations and benchmarks. A comprehensive paper documenting these methods and results is currently in development.
 
 ---
 
@@ -17,8 +17,6 @@ cryoet-particle-picking/
 │   ├── exp1_empiar10988_ribo/     # ProPicker fine-tuning on EMPIAR-10988 ribosomes
 │   └── exp2_umusynth_thy/         # ProPicker fine-tuning with UMU synthetic thyroglobulin
 ├── models/                        # Pre-trained models (not tracked by git)
-│   ├── ProPicker/
-│   └── TomoTwin/
 ├── results/                       # Experiment results and outputs (not tracked by git)
 ├── tools/                         # External tools (not tracked by git)
 │   └── ProPicker/                 # Cloned ProPicker repository
@@ -114,10 +112,13 @@ It is recommended to create a separate Python environment for each tool followin
 
 ## Running Experiments
 
+For detailed information about each experiment, see the **[experiments/README.md](experiments/README.md)**.
+
 Each experiment is located in `experiments/<experiment_name>/` and uses two configuration files:
 
 - **`paths.py`**: File system paths (datasets, models, output directories)
-- **`experiments/config.py`**: Experiment parameters (particle sizes, labels, utilities)
+- **`experiments/config.py`**: Shared utilities and common parameters
+- **`experiments/<exp>/config.py`**: Experiment-specific parameters
 
 ```python
 # In your notebook or script
@@ -149,10 +150,12 @@ from inference import get_pred_locmap_dict
 
 ### Available Experiments
 
-| Experiment | Description | Files |
-|------------|-------------|-------|
-| `exp1_empiar10988_ribo` | ProPicker fine-tuning and inference on EMPIAR-10988 ribosomes | `exp1_empiar10988_ribo_ppicker_finetuning.ipynb`<br>`exp1_empiar10988_ribo_ppicker_inference.ipynb` |
-| `exp2_umusynth_thy` | ProPicker fine-tuning with UMU synthetic thyroglobulin data | `exp2_umusynth_thy_ppicker_finetuning.ipynb`<br>`scripts/umusynth_fine_tuning.py`<br>`scripts/umusynth_inference.py`<br>`scripts/update_csv_paths.py` |
+> See [experiments/README.md](experiments/README.md) for detailed documentation.
+
+| Experiment | Description | Dataset |
+|------------|-------------|---------|
+| `exp1_empiar10988_ribo` | ProPicker fine-tuning on cytoplasmic ribosomes | EMPIAR-10988 |
+| `exp2_umusynth_thy` | ProPicker fine-tuning on synthetic thyroglobulin | UMU Synthetic |
 
 ### Configuration Files
 

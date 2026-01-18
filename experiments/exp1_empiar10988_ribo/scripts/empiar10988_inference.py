@@ -1,30 +1,31 @@
 #!/usr/bin/env python3
 """
-Inference script for ProPicker fine-tuned on UMU Synthetic Thyroglobulin dataset.
-Based on empiar10988_inference.py
+Inference script for ProPicker fine-tuned on EMPIAR-10988 Ribosome dataset.
+Adapted from ProPicker tutorial2 to work from experiments directory.
 
 Usage:
     cd /path/to/cryoet-particle-picking/tools/ProPicker
     conda activate deepetpicker
-    python ../../experiments/exp2_umusynth_thy/scripts/umusynth_inference.py
+    python ../../experiments/exp1_empiar10988_ribo/scripts/empiar10988_inference.py
 """
 
 from utils.mrctools import load_mrc_data, save_mrc_data
-from paths import PROPICKER_MODEL_FILE, UMU_SYNTH_TOMOS_DIR, EXP2_RESULTS_DIR
-from experiments.config import EXP2_VAL_TOMOS
+from data.preparation_functions.prepare_empiar10988 import empiar10988_ts_to_slice_of_interest
+from paths import PROPICKER_MODEL_FILE, EMPIAR10988_BASE_DIR, EXP1_RESULTS_DIR
+from experiments.config import EXP1_CROP_DELTA, EXP1_VAL_TS
+import importlib.util
+import glob
+import copy
+import shutil
 import sys
 import os
-import shutil
-import copy
-import glob
-import importlib.util
 
 # Add paths BEFORE any project imports
 SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
 PROJECT_ROOT = os.path.dirname(os.path.dirname(os.path.dirname(SCRIPT_DIR)))
 PROPICKER_DIR = os.path.join(PROJECT_ROOT, "tools", "ProPicker")
 
-# Add ProPicker tools to path
+# Add ProPicker tools to path (for utils, data, etc.)
 sys.path.insert(0, PROPICKER_DIR)
 os.chdir(PROPICKER_DIR)
 
@@ -37,15 +38,16 @@ sys.path.insert(0, os.path.join(PROJECT_ROOT, "experiments"))
 # Now import project modules
 
 # =============================================================================
-# CONFIGURATION (imported from experiments.config)
+# CONFIGURATION
 # =============================================================================
 
 # Tomograms to test (use validation set from fine-tuning)
-test_tomos = EXP2_VAL_TOMOS
+test_ts = EXP1_VAL_TS
+crop_delta = EXP1_CROP_DELTA
 
-# Checkpoint file from fine-tuning (will be auto-detected)
+# Paths based on fine-tuning output
 FINETUNING_DIR = os.path.join(
-    str(EXP2_RESULTS_DIR), "fine_tuning_deepetpicker")
+    str(EXP1_RESULTS_DIR), "fine_tuning_deepetpicker", f"crop_delta={crop_delta}")
 ckpt_file = None  # Will be auto-detected
 
 # Training config file (generated during fine-tuning)
@@ -53,11 +55,11 @@ train_cfg_file = os.path.join(FINETUNING_DIR, "configs", "train.py")
 
 # Prompt embedding file
 prompt_embed_file = os.path.join(
-    str(EXP2_RESULTS_DIR), "fixed_prompts_umusynth_thy.json")
+    str(EXP1_RESULTS_DIR), "fixed_prompts_empiar10988.json")
 
 # Inference parameters
 gpu = 0
-batch_size = 2
+batch_size = 16
 
 # Temporary directory for inference
 tmp_dir = os.path.join(FINETUNING_DIR, "test")
@@ -70,7 +72,6 @@ tmp_dir = os.path.join(FINETUNING_DIR, "test")
 def find_best_checkpoint(finetuning_dir):
     """Find the best checkpoint from training"""
 
-    # Look for checkpoints in the runs directory
     runs_dir = os.path.join(finetuning_dir, "runs", "train")
     if not os.path.exists(runs_dir):
         raise FileNotFoundError(
@@ -102,7 +103,7 @@ def find_best_checkpoint(finetuning_dir):
 
 if __name__ == "__main__":
     print("=" * 70)
-    print("ProPicker Inference on UMU Synthetic Thyroglobulin Dataset")
+    print("ProPicker Inference on EMPIAR-10988 Ribosome Dataset")
     print("=" * 70)
 
     # Find checkpoint if not specified
@@ -126,32 +127,32 @@ if __name__ == "__main__":
         shutil.rmtree(tmp_dir)
     os.makedirs(f"{tmp_dir}/raw_data")
 
-    print(f"\nProcessing {len(test_tomos)} test tomograms...")
+    print(f"\nProcessing {len(test_ts)} test tomograms: {test_ts}")
 
-    # Load and save test data (same preprocessing as empiar10988)
-    for tomo_name in test_tomos:
-        print(f"  Loading {tomo_name}...")
-        tomo_file = os.path.join(str(UMU_SYNTH_TOMOS_DIR), f"{tomo_name}.mrc")
-        # Invert contrast (same as training)
-        tomo = -1 * load_mrc_data(tomo_file).float()
-        save_mrc_data(tomo, f"{tmp_dir}/raw_data/{tomo_name}.mrc")
+    # Load and save test data
+    for ts_id in test_ts:
+        print(f"  Loading {ts_id}...")
+        tomo_file = f"{EMPIAR10988_BASE_DIR}/tomograms/{ts_id}.rec"
+        slice_of_interest = empiar10988_ts_to_slice_of_interest[ts_id]
+        tomo = -1 * load_mrc_data(tomo_file).float()[slice_of_interest]
+        save_mrc_data(tomo, f"{tmp_dir}/raw_data/{ts_id}.mrc")
         del tomo
 
-    # Create preprocessing config (same as empiar10988_inference.py)
+    # Create preprocessing config
     print("\nCreating preprocessing config...")
     cfg_dir = os.path.dirname(train_cfg_file)
     pre_config_file = f"{cfg_dir}/preprocess_test.py"
 
     lines = [
         "pre_config={",
-        f'"dset_name": "umusynth_test",',
+        f'"dset_name": "empiar10988_test",',
         f'"base_path": "{tmp_dir}",',
         f'"tomo_path": "{tmp_dir}/raw_data",',
         f'"tomo_format": ".mrc",',
         f'"norm_type": "standardization",',
-        f'"skip_coords": "True",',  # Don't need coordinates for testing
-        f'"skip_labels": "True",',  # Don't need labels for testing
-        f'"skip_ocp": "True"',      # Don't need occupancy for testing
+        f'"skip_coords": "True",',
+        f'"skip_labels": "True",',
+        f'"skip_ocp": "True"',
         "}"
     ]
 
@@ -166,7 +167,7 @@ if __name__ == "__main__":
     os.system(
         f"python ./DeepETPicker_ProPicker/bin/preprocess.py --pre_configs {pre_config_file}")
 
-    # Modify train config for testing (same as empiar10988_inference.py)
+    # Modify train config for testing
     print("\nCreating test config...")
     module_name = "train_configs_module"
     spec = importlib.util.spec_from_file_location(module_name, train_cfg_file)
@@ -175,8 +176,8 @@ if __name__ == "__main__":
 
     test_configs = copy.deepcopy(train_module.train_configs)
     test_configs["pre_configs"] = pre_config_file
-    test_configs["train_set_ids"] = f"0-{len(test_tomos)-1}"
-    test_configs["val_set_ids"] = f"0-{len(test_tomos)-1}"
+    test_configs["train_set_ids"] = f"0-{len(test_ts)-1}"
+    test_configs["val_set_ids"] = f"0-{len(test_ts)-1}"
     test_configs["gpu_ids"] = str(gpu)
     test_configs["batch_size"] = batch_size
     test_configs["dset_name"] = "test"
@@ -190,7 +191,7 @@ if __name__ == "__main__":
         f.write("train_configs=")
         f.write(str(test_configs).replace("'", '"'))
 
-    # Run inference (same as empiar10988_inference.py)
+    # Run inference
     print("\n" + "=" * 70)
     print("Running inference...")
     print("=" * 70)
@@ -209,5 +210,3 @@ if __name__ == "__main__":
     print("Inference complete!")
     print(f"Results saved to: {tmp_dir}")
     print("=" * 70)
-
-    # Note: Results are kept for inspection (unlike empiar10988 which removes tmp_dir)
