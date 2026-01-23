@@ -13,6 +13,27 @@ Usage:
     python ../../experiments/exp2_umusynth_thy/scripts/umusynth_fine_tuning.py
 """
 
+import sys
+import os
+
+# Add paths BEFORE any project imports
+SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
+PROJECT_ROOT = os.path.dirname(os.path.dirname(os.path.dirname(SCRIPT_DIR)))
+PROPICKER_DIR = os.path.join(PROJECT_ROOT, "tools", "ProPicker")
+PROPICKER_INNER_DIR = os.path.join(PROPICKER_DIR, "propicker")
+
+# Add ProPicker tools to path (for utils.mrctools)
+# DeepETPicker_ProPicker is inside propicker/, so we need to chdir there
+sys.path.insert(0, PROPICKER_INNER_DIR)
+os.chdir(PROPICKER_INNER_DIR)
+
+# Add project root to path for paths.py
+sys.path.insert(0, PROJECT_ROOT)
+
+# Add experiments to path for config import
+sys.path.insert(0, os.path.join(PROJECT_ROOT, "experiments"))
+
+# Now import project modules
 from utils.mrctools import load_mrc_data, save_mrc_data
 from paths import (
     PROPICKER_MODEL_FILE,
@@ -36,25 +57,6 @@ import pandas as pd
 import gc
 import glob
 import shutil
-import sys
-import os
-
-# Add paths BEFORE any project imports
-SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
-PROJECT_ROOT = os.path.dirname(os.path.dirname(os.path.dirname(SCRIPT_DIR)))
-PROPICKER_DIR = os.path.join(PROJECT_ROOT, "tools", "ProPicker")
-
-# Add ProPicker tools to path
-sys.path.insert(0, PROPICKER_DIR)
-os.chdir(PROPICKER_DIR)
-
-# Add project root to path for paths.py
-sys.path.insert(0, PROJECT_ROOT)
-
-# Add experiments to path for config import
-sys.path.insert(0, os.path.join(PROJECT_ROOT, "experiments"))
-
-# Now import project modules
 
 # Disable warnings for chained assignments in pandas
 pd.options.mode.chained_assignment = None

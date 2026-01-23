@@ -131,3 +131,8 @@ lightning_logs/
 *.tmp
 *.temp
 *.bak
+
+# ===========================================
+# Documentation
+# ===========================================
+docs/HernanGuirao_Carlos_TFG_CryoET_ParticlePicking_2026.*

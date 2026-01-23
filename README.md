@@ -10,7 +10,6 @@
 cryoet-particle-picking/
 ├── paths.py                       # Central paths configuration file
 ├── data/                          # Datasets (not tracked by git)
-│   └── .gitkeep
 ├── docs/                          # Documentation and papers
 ├── experiments/                   # Experiment notebooks and scripts
 │   ├── config.py                  # Configuration and utilities for experiments
@@ -156,23 +155,3 @@ from inference import get_pred_locmap_dict
 |------------|-------------|---------|
 | `exp1_empiar10988_ribo` | ProPicker fine-tuning on cytoplasmic ribosomes | EMPIAR-10988 |
 | `exp2_umusynth_thy` | ProPicker fine-tuning on synthetic thyroglobulin | UMU Synthetic |
-
-### Configuration Files
-
-#### `paths.py` (Project Root)
-
-Contains all file system paths:
-
-- `PROJECT_ROOT`, `DATA_DIR`, `MODELS_DIR`, `TOOLS_DIR`: Project structure
-- `PROPICKER_MODEL_FILE`, `TOMOTWIN_MODEL_FILE`: Model paths
-- `EMPIAR10988_BASE_DIR`, `UMU_SYNTH_DIR`: Dataset paths
-- `EXP2_*`, `EXP3_*`: Experiment output directories
-
-#### `experiments/config.py`
-
-Contains experiment parameters and utilities:
-
-- `setup_propicker_paths()`: Adds ProPicker tools to `sys.path`
-- `THYROGLOBULIN_*`: Thyroglobulin particle parameters
-- `RIBOSOME_*`: Ribosome particle parameters
-- `PROMPT_SIZE`, `LABEL_DIAMETER`: Common experiment values

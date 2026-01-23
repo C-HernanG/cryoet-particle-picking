@@ -9,9 +9,6 @@ Usage:
     python ../../experiments/exp2_umusynth_thy/scripts/umusynth_inference.py
 """
 
-from utils.mrctools import load_mrc_data, save_mrc_data
-from paths import PROPICKER_MODEL_FILE, UMU_SYNTH_TOMOS_DIR, EXP2_RESULTS_DIR
-from experiments.config import EXP2_VAL_TOMOS
 import sys
 import os
 import shutil
@@ -23,10 +20,12 @@ import importlib.util
 SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
 PROJECT_ROOT = os.path.dirname(os.path.dirname(os.path.dirname(SCRIPT_DIR)))
 PROPICKER_DIR = os.path.join(PROJECT_ROOT, "tools", "ProPicker")
+PROPICKER_INNER_DIR = os.path.join(PROPICKER_DIR, "propicker")
 
-# Add ProPicker tools to path
-sys.path.insert(0, PROPICKER_DIR)
-os.chdir(PROPICKER_DIR)
+# Add ProPicker tools to path (for utils.mrctools)
+# DeepETPicker_ProPicker is inside propicker/, so we need to chdir there
+sys.path.insert(0, PROPICKER_INNER_DIR)
+os.chdir(PROPICKER_INNER_DIR)
 
 # Add project root to path for paths.py
 sys.path.insert(0, PROJECT_ROOT)
@@ -35,6 +34,9 @@ sys.path.insert(0, PROJECT_ROOT)
 sys.path.insert(0, os.path.join(PROJECT_ROOT, "experiments"))
 
 # Now import project modules
+from utils.mrctools import load_mrc_data, save_mrc_data
+from paths import PROPICKER_MODEL_FILE, UMU_SYNTH_TOMOS_DIR, EXP2_RESULTS_DIR, EXP2_INFERENCE_DIR
+from experiments.config import EXP2_VAL_TOMOS
 
 # =============================================================================
 # CONFIGURATION (imported from experiments.config)
@@ -46,6 +48,7 @@ test_tomos = EXP2_VAL_TOMOS
 # Checkpoint file from fine-tuning (will be auto-detected)
 FINETUNING_DIR = os.path.join(
     str(EXP2_RESULTS_DIR), "fine_tuning_deepetpicker")
+# ckpt_file = ckpt_file = os.path.join(PROJECT_ROOT, "models", "propicker.ckpt")  # Will be auto-detected
 ckpt_file = None  # Will be auto-detected
 
 # Training config file (generated during fine-tuning)
@@ -205,9 +208,73 @@ if __name__ == "__main__":
         f"--prompt_embed_file '{prompt_embed_file}'"
     )
 
+    # =========================================================================
+    # Copy results to permanent location
+    # =========================================================================
+    print("\n" + "=" * 70)
+    print("Copying inference results...")
+    print("=" * 70)
+
+
+    # Find the version directory with results
+    runs_dir = os.path.join(FINETUNING_DIR, "runs", "train")
+    version_dirs = sorted(glob.glob(os.path.join(runs_dir, "*", "version_*")))
+    if version_dirs:
+        latest_version = version_dirs[-1]
+
+        # Buscar un índice para no sobrescribir resultados previos
+        base_dir = str(EXP2_INFERENCE_DIR)
+        idx = 1
+        while True:
+            inference_output_dir = f"{base_dir}_run{idx}"
+            if not os.path.exists(inference_output_dir):
+                break
+            idx += 1
+        os.makedirs(inference_output_dir, exist_ok=False)
+
+        # Copy full segmentation output (localization maps as .pt files)
+        seg_output_dir = os.path.join(latest_version, "full_segmentation_output")
+        if os.path.exists(seg_output_dir):
+            dest_locmaps = os.path.join(inference_output_dir, "locmaps")
+            shutil.copytree(seg_output_dir, dest_locmaps)
+            print(f"  Localization maps saved to: {dest_locmaps}")
+
+            # Also convert .pt to .mrc for easier visualization
+            import torch
+            mrc_output_dir = os.path.join(inference_output_dir, "locmaps_mrc")
+            os.makedirs(mrc_output_dir, exist_ok=True)
+            for pt_file in glob.glob(os.path.join(dest_locmaps, "*.pt")):
+                tomo_name = os.path.basename(pt_file).replace(".pt", "")
+                locmap = torch.load(pt_file)
+                if isinstance(locmap, dict):
+                    # Extract the actual tensor from dict if needed
+                    locmap = locmap.get('segmentation', locmap.get('data', list(locmap.values())[0]))
+                save_mrc_data(locmap.float(), os.path.join(mrc_output_dir, f"{tomo_name}_locmap.mrc"))
+                print(f"    Converted {tomo_name} to MRC")
+            print(f"  MRC localization maps saved to: {mrc_output_dir}")
+
+        # Copy predicted coordinates
+        coords_dirs = ["Coords_All", "Coords_withArea"]
+        predicted_labels_dir = os.path.join(latest_version, "PredictedLabels")
+        for coords_subdir in coords_dirs:
+            src_coords = os.path.join(predicted_labels_dir, coords_subdir)
+            if os.path.exists(src_coords):
+                dest_coords = os.path.join(inference_output_dir, coords_subdir)
+                shutil.copytree(src_coords, dest_coords)
+                print(f"  Predicted coordinates saved to: {dest_coords}")
+    else:
+        print("  WARNING: Could not find inference results in runs directory")
+
+    # Clean up temporary data (but keep configs for reference)
+    print("\nCleaning up temporary data...")
+    if os.path.exists(f"{tmp_dir}/raw_data"):
+        shutil.rmtree(f"{tmp_dir}/raw_data")
+    if os.path.exists(f"{tmp_dir}/data_std"):
+        shutil.rmtree(f"{tmp_dir}/data_std")
+
     print("\n" + "=" * 70)
     print("Inference complete!")
-    print(f"Results saved to: {tmp_dir}")
+    print(f"Results saved to: {inference_output_dir}")
     print("=" * 70)
 
     # Note: Results are kept for inspection (unlike empiar10988 which removes tmp_dir)
