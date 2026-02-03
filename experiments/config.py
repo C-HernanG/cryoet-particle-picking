@@ -102,6 +102,46 @@ EXP2_GPU_ID = 0
 EXP2_USE_BINARY_LABELS = True
 
 # =============================================================================
+# EXP3: Incremental Fine-Tuning Analysis Parameters
+# =============================================================================
+
+# EXP3: Same base parameters as EXP2
+THYROGLOBULIN_LABEL = 7           # Label in CSV (same as EXP2)
+
+# EXP3: Validation set (fixed - same tomograms for all increments)
+EXP3_VAL_TOMOS = [
+    "tomo_rec_5_snr1.66", "tomo_rec_6_snr1.17", "tomo_rec_7_snr1.13",
+    "tomo_rec_8_snr0.57", "tomo_rec_9_snr1.28"
+]
+
+# EXP3: Training pool (will be incrementally added)
+EXP3_TRAIN_POOL = [
+    "tomo_rec_0_snr1.63", "tomo_rec_1_snr1.46", "tomo_rec_2_snr1.07", "tomo_rec_3_snr0.63",
+    "tomo_rec_4_snr1.85", "tomo_rec_10_snr0.97", "tomo_rec_11_snr1.41", "tomo_rec_12_snr1.39",
+    "tomo_rec_13_snr1.1", "tomo_rec_14_snr0.43", "tomo_rec_15_snr1.03", "tomo_rec_16_snr0.93",
+    "tomo_rec_17_snr0.92", "tomo_rec_18_snr0.78", "tomo_rec_19_snr1.62", "tomo_rec_20_snr0.73",
+    "tomo_rec_21_snr0.34", "tomo_rec_22_snr0.97", "tomo_rec_23_snr0.29", "tomo_rec_24_snr1.39"
+]
+
+# EXP3: Incremental training schedule (number of training tomograms at each step)
+# This defines how many tomograms to use at each training increment
+EXP3_INCREMENTS = [1, 2, 4, 8, 12, 16, 20]
+
+# EXP3: Training parameters (same as EXP2)
+EXP3_MAX_EPOCHS = 20
+EXP3_BATCH_SIZE = 2
+EXP3_BLOCK_SIZE = 72
+EXP3_PAD_SIZE = 12
+EXP3_LEARNING_RATE = 1e-3
+EXP3_LABEL_DIAMETER = 21
+EXP3_GPU_ID = 0
+EXP3_USE_BINARY_LABELS = True
+
+# EXP3: Checkpoint saving configuration
+EXP3_SAVE_EVERY_N_EPOCHS = 5  # Save checkpoint every N epochs
+EXP3_SAVE_BEST = True         # Always save best checkpoint based on val_loss
+
+# =============================================================================
 # Utilities
 # =============================================================================
 
