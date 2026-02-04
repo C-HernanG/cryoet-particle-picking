@@ -59,6 +59,7 @@ from experiments.config import (
     EXP3_VAL_TOMOS,
     EXP3_INCREMENTS,
     EXP3_MAX_EPOCHS,
+    EXP3_EPOCHS_PER_INCREMENT,
     EXP3_BATCH_SIZE,
     EXP3_BLOCK_SIZE,
     EXP3_PAD_SIZE,
@@ -244,6 +245,10 @@ def train_increment(n_train_tomos, out_dir, skip_if_exists=True):
     train_set_ids = f"0-{len(train_tomos)-1}"
     val_set_ids = f"{len(train_tomos)}-{len(all_tomos)-1}"
     
+    # Get adaptive epochs for this increment
+    n_epochs = EXP3_EPOCHS_PER_INCREMENT.get(n_train_tomos, EXP3_MAX_EPOCHS)
+    print(f"  Using {n_epochs} epochs for {n_train_tomos} training tomograms")
+    
     os.system(
         f"python ./DeepETPicker_ProPicker/bin/generate_train_config.py "
         f"--pre_configs '{pre_config_file}' "
@@ -255,7 +260,7 @@ def train_increment(n_train_tomos, out_dir, skip_if_exists=True):
         f"--block_size {EXP3_BLOCK_SIZE} "
         f"--pad_size {EXP3_PAD_SIZE} "
         f"--learning_rate {EXP3_LEARNING_RATE} "
-        f"--max_epoch {EXP3_MAX_EPOCHS} "
+        f"--max_epoch {n_epochs} "
         f"--gpu_id {EXP3_GPU_ID}"
     )
     

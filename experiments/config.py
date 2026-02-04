@@ -127,8 +127,22 @@ EXP3_TRAIN_POOL = [
 # This defines how many tomograms to use at each training increment
 EXP3_INCREMENTS = [1, 2, 4, 8, 12, 16, 20]
 
+# EXP3: Adaptive epochs per increment
+# With fewer training samples, we need more epochs to learn patterns but risk overfitting.
+# With more samples, fewer epochs suffice and training is more stable.
+# These values aim to balance training effort across increments.
+EXP3_EPOCHS_PER_INCREMENT = {
+    1: 100,
+    2: 80,
+    4: 50,
+    8: 35,
+    12: 25,
+    16: 22,
+    20: 20,
+}
+
 # EXP3: Training parameters (same as EXP2)
-EXP3_MAX_EPOCHS = 20
+EXP3_MAX_EPOCHS = 100  # Maximum epochs (safety limit)
 EXP3_BATCH_SIZE = 2
 EXP3_BLOCK_SIZE = 72
 EXP3_PAD_SIZE = 12

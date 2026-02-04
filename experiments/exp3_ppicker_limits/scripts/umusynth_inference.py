@@ -49,7 +49,6 @@ from paths import (
     UMU_SYNTH_TOMOS_DIR,
     EXP3_RESULTS_DIR,
     EXP3_FINETUNING_DIR,
-    EXP3_INFERENCE_DIR,
     EXP3_CHECKPOINTS_DIR,
 )
 from experiments.config import (
@@ -84,16 +83,17 @@ output_suffix = ""
 # =============================================================================
 
 
-def run_inference_for_increment(n_train_tomos, force=False):
+def run_inference_for_increment(n_train_tomos, force=False, result_suffix=""):
     """
     Run inference using the checkpoint from a specific training increment.
     
     Args:
         n_train_tomos: Number of training tomograms used for this checkpoint
         force: Re-run inference even if results exist
+        result_suffix: Suffix for results directory (e.g., 'single_prompt', 'multi_prompt_n10')
     
     Returns:
-        Path to inference results, or None if failed
+        Path to results directory, or None if failed
     """
     print("\n" + "=" * 70)
     print(f"INFERENCE FOR INCREMENT: {n_train_tomos} training tomograms")
@@ -104,19 +104,20 @@ def run_inference_for_increment(n_train_tomos, force=False):
     ckpt_file = os.path.join(checkpoint_dir, "best_model.ckpt")
     train_cfg_file = os.path.join(checkpoint_dir, "train_config.py")
     
-    # Output directory (with optional suffix for different prompt types)
-    if output_suffix:
-        inference_output_dir = os.path.join(str(EXP3_INFERENCE_DIR), f"increment_{n_train_tomos}_{output_suffix}")
+    # Results directory: results_{suffix}/increment_{n}/
+    if result_suffix:
+        results_base_dir = os.path.join(str(EXP3_CHECKPOINTS_DIR), f"results_{result_suffix}")
     else:
-        inference_output_dir = os.path.join(str(EXP3_INFERENCE_DIR), f"increment_{n_train_tomos}")
+        results_base_dir = os.path.join(str(EXP3_CHECKPOINTS_DIR), "results")
+    
+    results_output_dir = os.path.join(results_base_dir, f"increment_{n_train_tomos}")
     
     # Check if already done
-    if not force and os.path.exists(inference_output_dir):
-        locmaps_dir = os.path.join(inference_output_dir, "locmaps")
-        if os.path.exists(locmaps_dir) and len(os.listdir(locmaps_dir)) > 0:
-            print(f"✅ Inference results already exist: {inference_output_dir}")
-            print("   Skipping (use --force to re-run)")
-            return inference_output_dir
+    coords_check_dir = os.path.join(results_output_dir, "PredictedLabels", "Coords_All")
+    if not force and os.path.exists(coords_check_dir) and len(os.listdir(coords_check_dir)) > 0:
+        print(f"✅ Inference results already exist in: {results_output_dir}")
+        print("   Skipping (use --force to re-run)")
+        return results_output_dir
     
     # Check prerequisites
     if not os.path.exists(ckpt_file):
@@ -134,6 +135,7 @@ def run_inference_for_increment(n_train_tomos, force=False):
     
     print(f"  Checkpoint: {ckpt_file}")
     print(f"  Config: {train_cfg_file}")
+    print(f"  Output: {results_output_dir}")
     
     # Setup temporary directory
     tmp_dir = os.path.join(str(EXP3_FINETUNING_DIR), f"increment_{n_train_tomos}", "test")
@@ -216,52 +218,30 @@ def run_inference_for_increment(n_train_tomos, force=False):
         f"--prompt_embed_file '{prompt_embed_file}'"
     )
     
-    # Copy results
-    print("\nCopying inference results...")
+    # Copy results to organized directory (per increment)
+    # DeepETPicker saves results in: EXP3_CHECKPOINTS_DIR/PredictedLabels/ and EXP3_CHECKPOINTS_DIR/full_segmentation_output/
+    print(f"\n📁 Copying results to: {results_output_dir}")
+    os.makedirs(results_output_dir, exist_ok=True)
     
-    runs_dir = os.path.join(str(EXP3_FINETUNING_DIR), f"increment_{n_train_tomos}", "runs", "train")
-    version_dirs = sorted(glob.glob(os.path.join(runs_dir, "*", "version_*")))
+    # Copy PredictedLabels
+    src_predicted = os.path.join(str(EXP3_CHECKPOINTS_DIR), "PredictedLabels")
+    dst_predicted = os.path.join(results_output_dir, "PredictedLabels")
+    if os.path.exists(src_predicted):
+        if os.path.exists(dst_predicted):
+            shutil.rmtree(dst_predicted)
+        shutil.copytree(src_predicted, dst_predicted)
+        shutil.rmtree(src_predicted)
+        print(f"   ✅ PredictedLabels copied")
     
-    if version_dirs:
-        latest_version = version_dirs[-1]
-        
-        # Create output directory
-        os.makedirs(inference_output_dir, exist_ok=True)
-        
-        # Copy segmentation outputs
-        seg_output_dir = os.path.join(latest_version, "full_segmentation_output")
-        if os.path.exists(seg_output_dir):
-            dest_locmaps = os.path.join(inference_output_dir, "locmaps")
-            if os.path.exists(dest_locmaps):
-                shutil.rmtree(dest_locmaps)
-            shutil.copytree(seg_output_dir, dest_locmaps)
-            print(f"  Localization maps saved to: {dest_locmaps}")
-            
-            # Convert .pt to .mrc
-            import torch
-            mrc_output_dir = os.path.join(inference_output_dir, "locmaps_mrc")
-            os.makedirs(mrc_output_dir, exist_ok=True)
-            for pt_file in glob.glob(os.path.join(dest_locmaps, "*.pt")):
-                tomo_name = os.path.basename(pt_file).replace(".pt", "")
-                locmap = torch.load(pt_file)
-                if isinstance(locmap, dict):
-                    locmap = locmap.get('segmentation', locmap.get('data', list(locmap.values())[0]))
-                save_mrc_data(locmap.float(), os.path.join(mrc_output_dir, f"{tomo_name}_locmap.mrc"))
-            print(f"  MRC localization maps saved to: {mrc_output_dir}")
-        
-        # Copy predicted coordinates
-        predicted_labels_dir = os.path.join(latest_version, "PredictedLabels")
-        for coords_subdir in ["Coords_All", "Coords_withArea"]:
-            src_coords = os.path.join(predicted_labels_dir, coords_subdir)
-            if os.path.exists(src_coords):
-                dest_coords = os.path.join(inference_output_dir, coords_subdir)
-                if os.path.exists(dest_coords):
-                    shutil.rmtree(dest_coords)
-                shutil.copytree(src_coords, dest_coords)
-                print(f"  Predicted coordinates saved to: {dest_coords}")
-    else:
-        print("  WARNING: Could not find inference results in runs directory")
-        return None
+    # Copy full_segmentation_output
+    src_segmentation = os.path.join(str(EXP3_CHECKPOINTS_DIR), "full_segmentation_output")
+    dst_segmentation = os.path.join(results_output_dir, "full_segmentation_output")
+    if os.path.exists(src_segmentation):
+        if os.path.exists(dst_segmentation):
+            shutil.rmtree(dst_segmentation)
+        shutil.copytree(src_segmentation, dst_segmentation)
+        shutil.rmtree(src_segmentation)
+        print(f"   ✅ full_segmentation_output copied")
     
     # Cleanup
     print("\nCleaning up...")
@@ -271,7 +251,8 @@ def run_inference_for_increment(n_train_tomos, force=False):
         shutil.rmtree(f"{tmp_dir}/data_std")
     
     print(f"✅ Inference complete for increment {n_train_tomos}")
-    return inference_output_dir
+    print(f"📁 Results saved to: {results_output_dir}")
+    return results_output_dir
 
 
 # =============================================================================
@@ -306,10 +287,27 @@ if __name__ == "__main__":
     else:
         prompt_embed_file = DEFAULT_PROMPT_FILE
     
-    # Set output suffix
-    output_suffix = args.output_suffix
-    if output_suffix:
-        print(f"📌 Output suffix: {output_suffix}")
+    # Determine output suffix from prompt file or argument
+    if args.output_suffix:
+        result_suffix = args.output_suffix
+    else:
+        # Auto-detect suffix from prompt filename
+        prompt_basename = os.path.basename(prompt_embed_file)
+        if "multi_instance" in prompt_basename.lower() or "multi_prompt" in prompt_basename.lower():
+            # Extract N from filename like "multi_instance_prompt_n10.json"
+            import re
+            match = re.search(r'n(\d+)', prompt_basename.lower())
+            if match:
+                result_suffix = f"multi_prompt_n{match.group(1)}"
+            else:
+                result_suffix = "multi_prompt"
+        elif "single_instance" in prompt_basename.lower() or "single_prompt" in prompt_basename.lower():
+            result_suffix = "single_prompt"
+        else:
+            # Default: use fixed prompts as single prompt
+            result_suffix = "single_prompt"
+    
+    print(f"📌 Results will be saved to: results_{result_suffix}/")
     
     # Check prerequisites
     if not os.path.exists(prompt_embed_file):
@@ -335,7 +333,7 @@ if __name__ == "__main__":
     # Run inference for each increment
     results = {}
     for n_tomos in increments_to_run:
-        result_dir = run_inference_for_increment(n_tomos, force=args.force)
+        result_dir = run_inference_for_increment(n_tomos, force=args.force, result_suffix=result_suffix)
         results[n_tomos] = result_dir
     
     # Summary
@@ -347,6 +345,9 @@ if __name__ == "__main__":
         status = "✅" if result_dir else "❌"
         print(f"  {status} Increment {n_tomos:2d}: {result_dir or 'FAILED'}")
     
-    print(f"\n📁 Results saved to: {EXP3_INFERENCE_DIR}")
+    results_path = os.path.join(str(EXP3_CHECKPOINTS_DIR), f"results_{result_suffix}")
+    print(f"\n📁 Results saved to: {results_path}")
+    print("   - PredictedLabels/Coords_All/")
+    print("   - full_segmentation_output/")
     print("\nNext step: Analyze results in the notebook")
     print("=" * 70)
