@@ -156,6 +156,49 @@ EXP3_SAVE_EVERY_N_EPOCHS = 5  # Save checkpoint every N epochs
 EXP3_SAVE_BEST = True         # Always save best checkpoint based on val_loss
 
 # =============================================================================
+# EXP4: Rotation Invariance Analysis Parameters
+# =============================================================================
+
+# EXP4: Objective - Test if ProPicker is rotation invariant
+# Strategy: Run 10 inferences per checkpoint using prompts with different rotations
+
+# EXP4: Number of prompts with different rotations to test
+EXP4_NUM_PROMPTS = 10
+
+# EXP4: Validation set (same as EXP3 for consistency)
+EXP4_VAL_TOMOS = [
+    "tomo_rec_5_snr1.66", "tomo_rec_6_snr1.17", "tomo_rec_7_snr1.13",
+    "tomo_rec_8_snr0.57", "tomo_rec_9_snr1.28"
+]
+
+# EXP4: Training pool for prompt extraction (same as EXP3)
+EXP4_TRAIN_POOL = [
+    "tomo_rec_0_snr1.63", "tomo_rec_1_snr1.46", "tomo_rec_2_snr1.07", "tomo_rec_3_snr0.63",
+    "tomo_rec_4_snr1.85", "tomo_rec_10_snr0.97", "tomo_rec_11_snr1.41", "tomo_rec_12_snr1.39",
+    "tomo_rec_13_snr1.1", "tomo_rec_14_snr0.43", "tomo_rec_15_snr1.03", "tomo_rec_16_snr0.93",
+    "tomo_rec_17_snr0.92", "tomo_rec_18_snr0.78", "tomo_rec_19_snr1.62", "tomo_rec_20_snr0.73",
+    "tomo_rec_21_snr0.34", "tomo_rec_22_snr0.97", "tomo_rec_23_snr0.29", "tomo_rec_24_snr1.39"
+]
+
+# EXP4: Checkpoints to evaluate (from EXP3)
+# - base: Original ProPicker model (no fine-tuning)
+# - single_prompt: Fine-tuned with single instance prompts
+# - multi_prompt: Fine-tuned with multi-instance prompts (N=10)
+EXP4_CHECKPOINTS = {
+    "base": None,  # Will use PROPICKER_MODEL_FILE directly
+    "increment_single": [1, 2, 4, 8, 12, 16, 20],  # From EXP3 single prompt
+    "increment_multi": [1, 2, 4, 8, 12, 16, 20],   # From EXP3 multi prompt
+}
+
+# EXP4: Minimum angular distance between selected prompts (in degrees)
+# This ensures we select prompts with diverse orientations
+EXP4_MIN_ANGULAR_DISTANCE = 30.0
+
+# EXP4: Inference parameters (same as EXP3)
+EXP4_BATCH_SIZE = 2
+EXP4_GPU_ID = 0
+
+# =============================================================================
 # Utilities
 # =============================================================================
 
