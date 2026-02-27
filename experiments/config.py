@@ -195,7 +195,7 @@ EXP4_CHECKPOINTS = {
 EXP4_MIN_ANGULAR_DISTANCE = 30.0
 
 # EXP4: Inference parameters (same as EXP3)
-EXP4_BATCH_SIZE = 2
+EXP4_BATCH_SIZE = 8  # Inference batch size (4090 can handle 6-8)
 EXP4_GPU_ID = 0
 
 # =============================================================================
