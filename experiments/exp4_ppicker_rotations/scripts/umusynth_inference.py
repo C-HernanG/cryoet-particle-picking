@@ -65,7 +65,7 @@ from experiments.config import (
     EXP4_NUM_PROMPTS,
     EXP4_BATCH_SIZE,
     EXP4_GPU_ID,
-    EXP3_INCREMENTS,
+    EXP4_CHECKPOINTS,
 )
 
 # =============================================================================
@@ -413,12 +413,12 @@ if __name__ == "__main__":
         checkpoint_configs.append(("base", None))
     
     if args.checkpoint_type is None or args.checkpoint_type == "single":
-        increments = [args.increment] if args.increment else EXP3_INCREMENTS
+        increments = [args.increment] if args.increment else EXP4_CHECKPOINTS["increment_single"]
         for inc in increments:
             checkpoint_configs.append(("single", inc))
     
     if args.checkpoint_type is None or args.checkpoint_type == "multi":
-        increments = [args.increment] if args.increment else EXP3_INCREMENTS
+        increments = [args.increment] if args.increment else EXP4_CHECKPOINTS["increment_multi"]
         for inc in increments:
             checkpoint_configs.append(("multi", inc))
     

@@ -186,8 +186,8 @@ EXP4_TRAIN_POOL = [
 # - multi_prompt: Fine-tuned with multi-instance prompts (N=10)
 EXP4_CHECKPOINTS = {
     "base": None,  # Will use PROPICKER_MODEL_FILE directly
-    "increment_single": [1, 2, 4, 8, 12, 16, 20],  # From EXP3 single prompt
-    "increment_multi": [1, 2, 4, 8, 12, 16, 20],   # From EXP3 multi prompt
+    "increment_single": [4, 8, 16],  # From EXP3 single prompt
+    "increment_multi": [4, 8, 16],   # From EXP3 multi prompt
 }
 
 # EXP4: Minimum angular distance between selected prompts (in degrees)
