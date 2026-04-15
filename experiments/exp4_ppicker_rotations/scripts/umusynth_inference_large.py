@@ -75,7 +75,7 @@ gpu = EXP4_GPU_ID
 batch_size = EXP4_BATCH_SIZE
 
 # Large prompt population run defaults
-DEFAULT_RUN_NAME = "large_prompt_population_200"
+DEFAULT_RUN_NAME = "large_prompt_population_125"
 DEFAULT_RESULTS_BASE = os.environ.get(
     "CRYOET_RESULTS_ROOT",
     "/media/Disco_12TB/cryoet-particle-picking-results/exp4_ppicker_rotations",
@@ -399,7 +399,7 @@ if __name__ == "__main__":
         "--results-root", type=str, default=None,
         help="Root directory for this run outputs (overrides --run-name)")
     parser.add_argument(
-        "--num-prompts", type=int, default=200,
+        "--num-prompts", type=int, default=125,
         help="Maximum number of prompt files to evaluate when --prompt-idx is not set")
     args = parser.parse_args()
     
