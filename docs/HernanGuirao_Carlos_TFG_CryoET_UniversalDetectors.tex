@@ -292,6 +292,8 @@ Chapter~2 reviews the cryo-ET localization problem and the background needed to 
 \section{Cryo-electron tomography fundamentals}
 Cryo-ET reconstructs a 3D volume from a series of projection images acquired at different tilt angles. Because the angular range is limited in practice, Fourier space is sampled incompletely and the reconstruction exhibits the well-known missing wedge artifact \cite{lucic2013cryoet,beck2016cryoet}. This causes direction-dependent distortions and makes pattern recognition intrinsically harder than in isotropic 3D imaging settings.
 
+At a workflow level, the acquisition and reconstruction process can be summarized in four steps. First, a tilt series of 2D projections is acquired while the specimen is mechanically tilted. Second, the images are motion-corrected and aligned, usually with fiducials or alignment models that compensate for grid deformation. Third, a 3D tomogram is reconstructed, typically through weighted or filtered backprojection or through iterative methods such as SIRT and SART. Fourth, the reconstructed volume is used for downstream tasks such as particle picking, segmentation or subtomogram averaging \cite{pyle2021current,zhao2023computational}. This sequence matters because the localization problem studied in this thesis is not applied to raw particle images but to reconstructed volumes that already contain the acquisition footprint of the microscope and the reconstruction algorithm.
+
 From a machine learning perspective, cryo-ET data combine several characteristics that complicate detector training:
 \begin{itemize}
   \item signal is weak and often varies locally across the volume;
@@ -317,9 +319,19 @@ Figure~\ref{fig:cryoet-reconstruction} gives a representative example of the typ
 \label{sec:rotation-sensitivity}
 The rotational-sensitivity problem studied later in EXP4 is not only a model-side artifact. It starts at acquisition. In an ideal isotropic 3D imaging system, rotating a particle would mostly produce a rotated copy of the same signal. Cryo-ET breaks that symmetry because the specimen is scanned over a limited angular range and around a single mechanical tilt axis. The resulting missing wedge removes direction-dependent Fourier information and creates anisotropic blur and elongation in the reconstructed tomogram \cite{lucic2013cryoet,beck2016cryoet}. As a consequence, two subtomograms containing the same macromolecule at different orientations are not related by a clean rigid rotation alone.
 
+This can be written schematically as
+\[
+  y \approx \mathcal{A}_{\mathrm{mw}}(R x) + \eta,
+\]
+where \(x\) is the underlying particle, \(R\) is its rigid orientation, \(\eta\) is noise and \(\mathcal{A}_{\mathrm{mw}}\) is the acquisition-reconstruction operator induced by limited-angle tomography. The key point is that \(\mathcal{A}_{\mathrm{mw}}\) is not rotationally neutral. Rotating the object and then reconstructing it is not equivalent to reconstructing it once and rigidly rotating the resulting volume. This is precisely why missing-wedge compensation methods such as IsoNet exist: the anisotropy induced by limited-angle acquisition degrades both visual interpretability and isotropy of the reconstructed signal \cite{liu2022isonet}.
+
 This matters directly for promptable detection. A prompt crop does not contain only the target particle. It also contains the acquisition footprint left by the missing wedge, the local reconstruction context, possible centering error and whatever contrast distortions survive preprocessing. Therefore, a prompt that is geometrically favorable with respect to the acquisition axis can yield a much more stable representation than another prompt from the same class but at a less favorable orientation. In practical terms, prompt identity and prompt orientation become plausible explanatory variables even before any model-specific effect is considered.
 
 The model architecture adds a second source of difficulty. Standard convolutional networks are naturally equivariant to translations, but not to arbitrary rotations \cite{cohen2016gcnn}. In 3D this issue is more severe, because the relevant variability belongs to volumetric rigid motions and because enforcing rotation equivariance requires specialized constructions such as steerable 3D convolutions \cite{weiler2018steerable3d}. ProPicker gains flexibility by conditioning the detector on a prompt, but that conditioning mechanism does not make the overall pipeline automatically rotation-invariant \cite{wiedemann2025propicker}. This is why EXP4 should be interpreted as a targeted test of the full acquisition--reconstruction--prompt--model chain, not as a cosmetic ablation.
+
+The specific target used in the synthetic benchmark adds a second, independent source of rotational ambiguity. Human thyroglobulin is a homodimer with global C2 symmetry, and the reported cryo-EM structure is approximately \(250 \times 160 \times 110\)~\AA{}, with the shortest dimension aligned with the C2 axis \cite{adaixo2022thyroglobulin}. Two poses that differ by a \(180^\circ\) rotation around that symmetry axis are physically equivalent. For a pose-sensitive learning system, the natural space is therefore not pure \(\mathrm{SO}(3)\), but \(\mathrm{SO}(3)/\mathrm{C}_2\). Any formulation that ignores this symmetry implicitly asks the model to separate states that the structure itself does not distinguish.
+
+For thyroglobulin, the problematic rotations are therefore of two kinds. The first are symmetry-equivalent rotations, which should ideally be collapsed by the loss or by the evaluation metric. The second are acquisition-amplified ambiguities: views for which the discriminative differences between poses lie mostly along the anisotropic direction degraded by the missing wedge. These two mechanisms interact. Near-symmetric views are already difficult to distinguish in \(\mathrm{SO}(3)/\mathrm{C}_2\), and missing-wedge anisotropy can make them even more degenerate after reconstruction. From a modeling perspective, this is why physically plausible 3D augmentations, symmetry-aware losses and training under matched missing-wedge conditions are attractive strategies in cryo-ET \cite{weiler2018steerable3d,liu2022isonet,zhao2023computational}.
 
 \begin{figure}[htbp]
   \centering
@@ -881,40 +893,24 @@ The implication is important for cryo-ET workflows. A detector with slightly low
 The message of EXP3 is that the optimized pipeline does not need a large labeled dataset to become useful. With only 4 training tomograms, ProPicker already enters a high-performance regime, and with 12 tomograms plus multi-prompt inference it reaches the best observed result of the whole study. The benefit of the multi-prompt strategy is practical and easy to explain: it makes the detector less impulsive, so it raises precision by rejecting many false alarms without destroying recall.
 
 \section{Experiment 4: Prompt-robustness analysis}
-EXP4 studies whether the remaining variability after fine-tuning is primarily a tomogram problem or a prompt problem. More specifically, it tests the acquisition-to-model rotation sensitivity described in Section~\ref{sec:rotation-sensitivity}.
+EXP4 studies the residual instability that remains after fine-tuning, but the analysis is structured around a more precise question than in the earlier exploratory version. The issue is not merely whether a prompt has a \enquote{bad rotation}. The relevant question is whether failures are better explained by raw tomogram quality, by acquisition anisotropy from the missing wedge, or by symmetry-aware prompt ambiguity in the specific case of thyroglobulin. In other words, EXP4 is the point where the thesis moves from a generic prompt-robustness study to a physically grounded interpretation of prompt failure.
 
 \subsection{Question and hypothesis}
-The question is whether a fine-tuned detector is effectively invariant to prompt orientation and prompt identity once the large domain-shift issue has been solved. The hypothesis is twofold: family-level averages will remain high after fine-tuning, but prompt-level differences will still survive and will correlate more strongly with prompt geometry or embedding descriptors than with SNR alone.
+The question is whether a strong fine-tuned checkpoint is effectively invariant to prompt identity once the domain-shift problem has been solved, and if not, what kind of physical explanation best fits the remaining failures. The working hypothesis is threefold. First, family-level averages after fine-tuning can still look strong even when some prompts are unusable. Second, the dominant failure mode will be recall collapse rather than a uniform increase in false positives. Third, simple source-tomogram SNR or a single angle-to-\(Z\) explanation will be too weak to account for the worst prompts; the more realistic explanation will involve the interaction between prompt representativeness, missing-wedge anisotropy and the C2 symmetry of thyroglobulin.
 
 \subsection{Implementation and controls}
-EXP4 extracts prompts only from the training pool so that the robustness study does not leak validation information into prompt construction. The selection pipeline is explicit and staged:
+The current EXP4 analysis is based on the large prompt-population notebook and deliberately uses only the training pool to avoid any validation leakage into prompt construction. A population of 200 prompts is generated, and the first 125 prompts are used as the statistical study subset. The focus checkpoint is \texttt{multi\_inc16}, chosen because EXP3 showed it to be one of the strongest and most stable operating points. Each prompt is evaluated on the fixed 5-tomogram validation set, and the analysis is carried out on prompt-level mean metrics aggregated over those validation tomograms.
+
+Prompt selection is explicit and staged:
 \begin{enumerate}
   \item remove particles that are closer than 50 voxels to the tomogram borders;
   \item compute the same physical-quality score introduced in EXP3;
-  \item keep only the top 35\% quality candidates, implemented as a quality-percentile threshold of 65, which leaves 364 high-quality candidates in the documented experiment run;
-  \item greedily select ten prompts that maximize the minimum quaternion angular distance, targeting at least \(30^\circ\).
+  \item keep only the top 35\% quality candidates, implemented as a quality-percentile threshold of 65;
+  \item build a rotation-diverse prompt population by greedy quaternion-distance selection;
+  \item restrict the statistical analysis to prompt indices \(0\) to \(124\).
 \end{enumerate}
 
-This prompt set is then used to evaluate the base checkpoint and the fine-tuned single-prompt and multi-prompt checkpoint families inherited from EXP3. The resulting analysis computes prompt-level mean performance, identifies the best and worst prompts, and correlates their outcomes with rotational angles, position in the tomogram and embedding statistics. In the underperforming-prompt follow-up, prompts 1 and 3 emerge as the weak group and prompts 6 and 9 as the strong reference group, which is what makes the later feature-comparison tables possible. The distance-based evaluator itself is kept unchanged from the rest of the UMU benchmark.
-
-\begin{table}[H]
-  \centering
-  \small
-  \begin{tabularx}{\textwidth}{l c Y}
-    \toprule
-    Comparison & Mean \(F_1\) & Observation \\
-    \midrule
-    Base family & 0.014 & Very poor aggregate performance on the synthetic validation set \\
-    Single-prompt fine-tuned family & 0.823 & Strongly and significantly above base \\
-    Multi-prompt fine-tuned family & 0.823 & Strongly and significantly above base \\
-    Single vs multi family test & -- & No significant difference at aggregate family level, \(p=1.0000\) \\
-    \bottomrule
-  \end{tabularx}
-  \caption{Aggregate comparison in EXP4.}
-  \label{tab:exp4-aggregate}
-\end{table}
-
-At first sight, Table~\ref{tab:exp4-aggregate} seems to suggest that prompt sensitivity might no longer matter after fine-tuning. That interpretation would be misleading. The family-level averages hide a wide dispersion between prompts.
+The descriptors extracted for each prompt are theory-guided rather than purely ad hoc. Quaternion metadata are converted into orientation features relative to the global \(Z\) axis, which serves as a proxy for beam-axis and tilt-axis sensitivity. The prompt subtomogram itself is characterized through source SNR, centering statistics, Fourier-band ratios, a missing-wedge anisotropy proxy, mass-center shift, inertia anisotropy and embedding descriptors. Prompt position inside the source tomogram is also retained, including normalized \(Z\) coordinate, distance to the tomogram center and distance to the borders. This produces an analysis aligned with the cryo-ET discussion of Section~\ref{sec:rotation-sensitivity}: not pure rotation in \(\mathrm{SO}(3)\), but rotation under anisotropic acquisition and object symmetry.
 
 \begin{table}[H]
   \centering
@@ -923,50 +919,49 @@ At first sight, Table~\ref{tab:exp4-aggregate} seems to suggest that prompt sens
     \toprule
     Quantity & Value \\
     \midrule
-    Global result for \texttt{multi\_inc16} & \(F_1 = 0.840 \pm 0.130\) \\
-    Mean precision & 0.912 \\
-    Mean recall & 0.809 \\
-    Best observed case & Prompt 6 on \texttt{tomo\_rec\_7\_snr1.13}, \(F_1 = 0.959\) \\
-    Weakest selected prompt & Prompt 1, mean \(F_1 = 0.599\), mean recall \(= 0.437\) \\
-    Strong selected prompts & Prompt 7, mean \(F_1 = 0.915\); prompt 9, mean \(F_1 = 0.913\) \\
-    Additional underperforming-prompt analysis & Worst candidate prompt reached \(f1\_mean = 0.4761\) \\
+    Study subset & First 125 prompts from the 200-prompt population, all extracted from training tomograms only \\
+    Focus checkpoint & \texttt{multi\_inc16}, used as the operational checkpoint for detailed prompt analysis \\
+    Global prompt-level performance & \(F_1 = 0.780 \pm 0.283\), Precision \(=0.824\), Recall \(=0.783\) \\
+    Best observed case & Prompt 80 on \texttt{tomo\_rec\_6\_snr1.17}, \(F_1 = 0.983\) \\
+    Hardest validation tomogram & \texttt{tomo\_rec\_8\_snr0.57}, mean \(F_1 = 0.659\) across the 125 prompts \\
+    Dominant failure pattern & Eight prompts reach mean recall \(=0.0\); prompt 124 reaches Precision \(=1.000\) but Recall \(=0.115\), showing severe under-activation rather than noisy overprediction \\
     \bottomrule
   \end{tabularx}
-  \caption{Prompt variability observed in EXP4.}
-  \label{tab:exp4-prompt-variability}
+  \caption{Summary of the restructured EXP4 analysis based on the 125-prompt study subset.}
+  \label{tab:exp4-summary}
 \end{table}
-
-Table~\ref{tab:exp4-prompt-variability} makes the bottleneck explicit. Even within a strong checkpoint family, some prompts are consistently far better than others. The degradation happens mostly through recall collapse, not through a uniform loss of precision. Therefore, the prompt is not merely a minor nuisance parameter; it is one of the main determinants of whether the detector activates properly.
-
-\begin{figure}[H]
-  \centering
-  \includegraphics[width=0.86\textwidth]{assets/figures/results/exp4_f1_by_prompt.png}
-  \caption{EXP4 prompt-level mean \(F_1\) from the repository underperforming-prompt analysis. Aggregate family averages hide a wide spread between prompts.}
-  \label{fig:exp4-prompt-f1}
-\end{figure}
 
 \begin{table}[H]
   \centering
   \small
-  \begin{tabular}{lcc}
+  \begin{tabularx}{\textwidth}{>{\raggedright\arraybackslash}p{0.34\textwidth} >{\raggedright\arraybackslash}p{0.24\textwidth} Y}
     \toprule
-    Feature & Correlation with \(F_1\) & \(p\)-value \\
+    Factor & Signal on mean recall & Interpretation \\
     \midrule
-    Rotation about the \(x\)-axis & \(+0.625\) & 0.0534 \\
-    Embedding dispersion & \(+0.556\) & 0.0952 \\
-    Distance to tomogram center & \(+0.479\) & 0.1616 \\
-    Tomogram SNR & \(+0.036\) & 0.9218 \\
+    Source prompt SNR & \(r = +0.051\) & Prompt-source tomogram quality alone does not explain the worst failures \\
+    Best orientation-only proxy (\texttt{axis\_x\_to\_z\_deg}) & \(r = -0.122\), \(p = 0.177\) & A simple angle-to-\(Z\) explanation is too weak to account for the observed variability \\
+    Missing-wedge anisotropy proxy & \(r = +0.082\), \(p = 0.363\) & Acquisition anisotropy matters conceptually, but this scalar proxy alone is not dominant \\
+    Distance to tomogram center & \(r = +0.195\), \(p = 0.0295\) & Positional effects inside the source tomogram are detectable \\
+    Edge-distance measure & \(r = -0.253\), \(p = 0.0044\) & Spatial context and prompt placement are more informative than source SNR \\
     \bottomrule
-  \end{tabular}
-  \caption{Selected correlations reported in the EXP4 underperforming-prompt analysis.}
-  \label{tab:exp4-correlations}
+  \end{tabularx}
+  \caption{Selected signals from the 125-prompt EXP4 analysis. Correlations are reported against mean recall, which is the main failure indicator in this experiment.}
+  \label{tab:exp4-signals}
 \end{table}
 
 \subsection{Interpretation}
-The correlations in Table~\ref{tab:exp4-correlations} should not be overinterpreted, because the sample size is limited. Even so, they reinforce a coherent narrative: prompt orientation and embedding-related descriptors appear more informative than SNR alone. In particular, rotation about the \(x\)-axis, embedding dispersion and distance to the tomogram center all show more signal than the tomogram SNR. Figure~\ref{fig:exp4-prompt-f1} complements that conclusion visually by showing that the spread between prompts is too large to dismiss as noise. This is one of the most important outcomes of the thesis, because it shifts the next research step from \enquote{collect more data} to \enquote{understand and control prompt quality}. The detector is already data-efficient. What it still lacks is a stable conditioning mechanism.
+The first conclusion is that prompt failure is real and large even after fine-tuning. Table~\ref{tab:exp4-summary} shows wide prompt-to-prompt dispersion, and the failure is dominated by recall collapse. This is the most important qualitative result of the section. The worst prompts do not usually produce a flood of false positives; instead, they fail to activate detections at all. Prompt 124 is a particularly informative example because it reaches perfect mean precision but very low mean recall. That is the signature of an overly restrictive or non-representative template, not of a prompt that is merely noisy.
+
+The second conclusion is that \enquote{tomogram quality} must be split into two distinct effects. The quality of the \emph{target validation tomogram} clearly matters: \texttt{tomo\_rec\_8\_snr0.57} is substantially harder than the other four validation tomograms. However, the quality of the \emph{source tomogram from which the prompt was extracted} is not sufficient to explain the worst prompts. Source SNR is almost uncorrelated with mean recall, and several catastrophic prompts originate from moderate source SNR values rather than from uniquely poor tomograms. Therefore, the dominant issue is not simply that the bad prompts come from bad source volumes.
+
+The third conclusion is that the simple geometric hypothesis \enquote{the problematic prompts are those aligned badly with the global \(Z\) axis} is not supported as a dominant explanation. Orientation-only correlations exist, but they are weak and statistically unconvincing in the 125-prompt study. The same is true for the missing-wedge anisotropy proxy when treated as a single scalar summary. This does not invalidate the acquisition theory presented in Section~\ref{sec:rotation-sensitivity}; rather, it shows that the acquisition effect interacts with other factors and is not recoverable through one naive angle feature alone.
+
+This is where thyroglobulin symmetry becomes important. Because the target is a C2 homodimer, the physically meaningful pose space is \(\mathrm{SO}(3)/\mathrm{C}_2\), not pure \(\mathrm{SO}(3)\) \cite{adaixo2022thyroglobulin}. Some prompt views are therefore intrinsically less informative because they lie near symmetry-equivalent configurations. When this intrinsic ambiguity is combined with missing-wedge anisotropy and with whatever local context is contained in the crop, the resulting prompt can become a poor class representative even if its raw SNR is acceptable. The worst prompts are better understood as symmetry-aware, acquisition-amplified ambiguous templates than as merely low-quality tomographic patches.
+
+The positional features in Table~\ref{tab:exp4-signals} reinforce that interpretation. Distance-to-center and edge-distance effects are more visible than source SNR. This suggests that prompt representativeness depends not only on nominal particle orientation, but also on the spatial context from which the crop is extracted: centering, local neighborhood and residual reconstruction bias inside the source tomogram. Under this reading, EXP4 is not a verdict that \enquote{rotation does not matter}; it is a more precise verdict that rotation matters through a compound mechanism involving symmetry, anisotropic acquisition and prompt content.
 
 \subsection{Direct summary}
-The important lesson of EXP4 is that good averages can hide fragile prompts. After fine-tuning, ProPicker is no longer limited mainly by lack of training data, but by the fact that some prompts activate the detector much better than others. In other words, the current frontier of optimization is not \enquote{more of the same training}, but better prompt selection, prompt ranking and prompt-quality control.
+The important lesson of EXP4 is that good average performance can hide catastrophic prompt failures. After fine-tuning, ProPicker is no longer limited mainly by lack of training data. It is limited by the fact that some prompts are poor representatives of the particle class. The present evidence does not support the claim that this is explained by source SNR alone, nor by a single angle-to-\(Z\) rule. A better interpretation is that the detector still struggles with symmetry-aware prompt ambiguity under anisotropic cryo-ET acquisition. The natural next steps are therefore symmetry-aware evaluation in \(\mathrm{SO}(3)/\mathrm{C}_2\), missing-wedge-matched data augmentation and stricter prompt-quality control based on representativeness rather than on SNR alone.
 
 \section{Cross-experiment discussion}
 The four experiments support a cumulative interpretation.
@@ -988,7 +983,7 @@ Table~\ref{tab:plain-language-summary} condenses the completed experiments into 
     EXP1 & Base ProPicker already detects ribosomes, but with \(F_1=0.3074\); fine-tuning raises the result to \(F_1=0.5714\) & The base model is informative on real data, but balanced use still requires adaptation \\
     EXP2 & On UMU thyroglobulin the pretrained model collapses (\(F_1 \approx 0.008\)); fine-tuning reaches mean \(F_1=0.891\) & Severe domain shift is the first hard limit of ProPicker and must be corrected with fine-tuning \\
     EXP3 & The best observed configuration is 12 tomograms with multi-prompt inference (\(F_1=0.919\)); 4 tomograms already define a strong regime & The current pipeline is data-efficient and multi-prompt conditioning is the best default operating mode \\
-    EXP4 & Good family averages hide large prompt-to-prompt variability; prompt descriptors explain more than SNR alone & The main remaining limit is prompt robustness, not lack of training data \\
+    EXP4 & Good averages hide recall-collapse prompts; simple source SNR and simple angle-to-\(Z\) explanations are too weak on their own & The main remaining limit is symmetry-aware prompt robustness, not lack of training data \\
     \bottomrule
   \end{tabularx}
   \caption{Plain-language synthesis of the completed experiments.}
@@ -1037,7 +1032,7 @@ The fifth priority is \textbf{failure analysis as a first-class step}. EXP4 show
     Prompt construction & Replace ad hoc prompt choice with quality scoring and prefer aggregated prompts for operational inference & EXP3 shows that multi-prompt conditioning reduces false positives and improves the best \(F_1\) \\
     Fine-tuning & Treat adaptation as mandatory under domain shift and expand training data incrementally rather than all at once & EXP2 shows collapse of the base model and EXP3 shows early performance saturation \\
     Inference calibration & Expose thresholds and cluster-size rules explicitly instead of treating them as implicit procedural choices & EXP1 separates threshold effects from true adaptation effects \\
-    Robustness analysis & Evaluate prompts individually and correlate failures with geometry and embedding descriptors & EXP4 shows that prompt variability survives after fine-tuning and is not explained by SNR alone \\
+    Robustness analysis & Evaluate prompts individually and relate failures to symmetry, acquisition geometry and spatial context, not to SNR alone & EXP4 shows that prompt variability survives after fine-tuning and is not explained by source SNR or a single angle feature alone \\
     Visualization and auditing & Export localization maps and keep outputs organized by experiment, prompt and checkpoint family & All experiments rely on consistent experimental organization to make comparisons and qualitative inspection tractable \\
     \bottomrule
   \end{tabularx}
@@ -1115,10 +1110,20 @@ Tsung-Yi Lin, Priya Goyal, Ross Girshick, Kaiming He, and Piotr Doll\'ar.
 \newblock Focal loss for dense object detection.
 \newblock In \emph{Proceedings of ICCV}, 2017.
 
+\bibitem{liu2022isonet}
+Yun-Tao Liu, Heng Zhang, Hui Wang, Chang-Lu Tao, Guo-Qiang Bi, and Z.~Hong Zhou.
+\newblock Isotropic reconstruction for electron tomography with deep learning.
+\newblock \emph{Nature Communications}, 13:6482, 2022.
+
 \bibitem{lucic2013cryoet}
 Vlado Luci\'{c}, Aur\'elien Rigort, and Wolfgang Baumeister.
 \newblock Cryo-electron tomography: the challenge of doing structural biology in situ.
 \newblock \emph{The Journal of Cell Biology}, 202(3):407--419, 2013.
+
+\bibitem{pyle2021current}
+Euan Pyle and Giulia Zanetti.
+\newblock Current data processing strategies for cryo-electron tomography and subtomogram averaging.
+\newblock \emph{Biochemical Journal}, 478(10):1827--1845, 2021.
 
 \bibitem{ren2015fasterrcnn}
 Shaoqing Ren, Kaiming He, Ross Girshick, and Jian Sun.
@@ -1159,6 +1164,16 @@ Maurice Weiler, Mario Geiger, Max Welling, Wouter Boomsma, and Taco Cohen.
 Xingyi Zhou, Dequan Wang, and Philipp Kr\"ahenb\"uhl.
 \newblock Objects as points.
 \newblock In \emph{Proceedings of ICCV}, 2019.
+
+\bibitem{zhao2023computational}
+Cuicui Zhao, Yao Zhao, Junjie Zhang, and Fei Sun.
+\newblock Computational methods for \emph{in situ} structural studies with cryo-electron tomography and subtomogram averaging.
+\newblock \emph{Frontiers in Cellular and Infection Microbiology}, 13:1286899, 2023.
+
+\bibitem{adaixo2022thyroglobulin}
+Ricardo Adaixo, Eva M. Steiner, Ricardo D. Righetto, Alexander Schmidt, Henning Stahlberg, and Nicholas M.~I. Taylor.
+\newblock Cryo-EM structure of native human thyroglobulin.
+\newblock \emph{Nature Communications}, 13:61, 2022.
 
 \end{thebibliography}
 

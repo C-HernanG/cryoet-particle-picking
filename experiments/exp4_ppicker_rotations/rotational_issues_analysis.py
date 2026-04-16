@@ -19,6 +19,10 @@ from sklearn.decomposition import PCA
 from sklearn.metrics import silhouette_score
 from sklearn.preprocessing import StandardScaler
 
+GLOBAL_Z_AXIS = np.array([0.0, 0.0, 1.0], dtype=float)
+THYROGLOBULIN_C2_AXIS_LOCAL = np.array([0.0, 0.0, 1.0], dtype=float)
+THYROGLOBULIN_C2_ROTATION = Rotation.from_rotvec(np.pi * THYROGLOBULIN_C2_AXIS_LOCAL)
+
 
 def _to_numpy(x):
     if hasattr(x, "detach"):
@@ -79,9 +83,35 @@ def pooled_effect_size(a, b):
     return (np.mean(a) - np.mean(b)) / pooled
 
 
+def _normalize_quaternion(q):
+    q = np.asarray(q, dtype=float)
+    norm = np.linalg.norm(q)
+    if norm == 0 or not np.isfinite(norm):
+        raise ValueError("Quaternion has invalid norm.")
+    return q / norm
+
+
+def rotation_geodesic_distance_deg(rot_a, rot_b):
+    return float(np.degrees((rot_a.inv() * rot_b).magnitude()))
+
+
+def quaternion_angular_distance_deg(q1, q2):
+    rot_a = Rotation.from_quat(_normalize_quaternion(q1))
+    rot_b = Rotation.from_quat(_normalize_quaternion(q2))
+    return rotation_geodesic_distance_deg(rot_a, rot_b)
+
+
+def quaternion_angular_distance_c2_deg(q1, q2, symmetry_rotation=THYROGLOBULIN_C2_ROTATION):
+    rot_a = Rotation.from_quat(_normalize_quaternion(q1))
+    rot_b = Rotation.from_quat(_normalize_quaternion(q2))
+    return min(
+        rotation_geodesic_distance_deg(rot_a, rot_b),
+        rotation_geodesic_distance_deg(rot_a, rot_b * symmetry_rotation),
+    )
+
+
 def quaternion_to_rotation_features(q1, q2, q3, q4):
-    q = np.asarray([q1, q2, q3, q4], dtype=float)
-    q = q / np.linalg.norm(q)
+    q = _normalize_quaternion([q1, q2, q3, q4])
 
     rot = Rotation.from_quat(q)
     with warnings.catch_warnings():
@@ -91,6 +121,9 @@ def quaternion_to_rotation_features(q1, q2, q3, q4):
     mat = rot.as_matrix()
     z_alignments = np.abs(mat[2, :])
     z_angles = np.degrees(np.arccos(np.clip(z_alignments, 0.0, 1.0)))
+    c2_axis_global = mat[:, 2]
+    c2_axis_alignments = np.abs(c2_axis_global)
+    c2_axis_angles = np.degrees(np.arccos(np.clip(c2_axis_alignments, 0.0, 1.0)))
 
     return {
         "euler_x": float(euler[0]),
@@ -109,6 +142,11 @@ def quaternion_to_rotation_features(q1, q2, q3, q4):
         "beam_axis_alignment_std": float(z_alignments.std()),
         "local_z_to_global_z_deg": float(z_angles[2]),
         "local_z_in_plane_abs": float(np.sqrt(mat[0, 2] ** 2 + mat[1, 2] ** 2)),
+        "c2_axis_alignment_abs_cos": float(c2_axis_alignments[2]),
+        "c2_axis_to_global_x_deg": float(c2_axis_angles[0]),
+        "c2_axis_to_global_y_deg": float(c2_axis_angles[1]),
+        "c2_axis_to_global_z_deg": float(c2_axis_angles[2]),
+        "c2_axis_in_plane_abs": float(np.sqrt(c2_axis_global[0] ** 2 + c2_axis_global[1] ** 2)),
     }
 
 
@@ -454,6 +492,45 @@ def _build_prompt_performance(df_focus):
     return df_prompt_perf
 
 
+def _build_prompt_orientation_context(df_prompts, proximity_degrees=(30.0, 45.0)):
+    if len(df_prompts) == 0:
+        return pd.DataFrame(columns=["prompt_idx"])
+
+    prompt_rows = df_prompts.sort_values("prompt_idx").reset_index(drop=True)
+    quats = prompt_rows[["q1", "q2", "q3", "q4"]].to_numpy(dtype=float)
+    n_prompts = len(prompt_rows)
+
+    raw_dist = np.full((n_prompts, n_prompts), np.inf, dtype=float)
+    c2_dist = np.full((n_prompts, n_prompts), np.inf, dtype=float)
+
+    for i in range(n_prompts):
+        for j in range(i + 1, n_prompts):
+            raw_ij = quaternion_angular_distance_deg(quats[i], quats[j])
+            c2_ij = quaternion_angular_distance_c2_deg(quats[i], quats[j])
+            raw_dist[i, j] = raw_dist[j, i] = raw_ij
+            c2_dist[i, j] = c2_dist[j, i] = c2_ij
+
+    rows = []
+    for i, prompt_idx in enumerate(prompt_rows["prompt_idx"].tolist()):
+        raw_nn = np.nan if n_prompts == 1 else float(np.min(raw_dist[i]))
+        c2_nn = np.nan if n_prompts == 1 else float(np.min(c2_dist[i]))
+        row = {
+            "prompt_idx": prompt_idx,
+            "raw_rotation_nn_deg": raw_nn,
+            "c2_rotation_nn_deg": c2_nn,
+            "symmetry_alias_gap_deg": (
+                raw_nn - c2_nn if np.isfinite(raw_nn) and np.isfinite(c2_nn) else np.nan
+            ),
+        }
+        for deg in proximity_degrees:
+            suffix = str(int(deg))
+            row[f"raw_neighbour_count_{suffix}deg"] = int(np.sum(raw_dist[i] < deg))
+            row[f"c2_neighbour_count_{suffix}deg"] = int(np.sum(c2_dist[i] < deg))
+        rows.append(row)
+
+    return pd.DataFrame(rows)
+
+
 def _build_subtomo_feature_table(df_prompts, subtomos, embeddings, tomo_shapes, study_num_prompts):
     n_prompts = min(study_num_prompts, len(subtomos), len(embeddings))
     embedding_array = _to_numpy(embeddings)[:n_prompts]
@@ -525,12 +602,24 @@ def _build_subtomo_feature_table(df_prompts, subtomos, embeddings, tomo_shapes, 
         )
         spectra[idx] = radial_power_spectrum(subtomo)
 
-    return pd.DataFrame(rows), spectra
+    df_features = pd.DataFrame(rows)
+    df_context = _build_prompt_orientation_context(df_prompts.head(n_prompts).copy())
+    df_features = df_features.merge(df_context, on="prompt_idx", how="left")
+    return df_features, spectra
 
 
 def _build_correlation_table(df_prompt_analysis):
     feature_groups = {
-        "orientation": [
+        "symmetry": [
+            "c2_axis_to_global_z_deg",
+            "c2_axis_alignment_abs_cos",
+            "c2_axis_in_plane_abs",
+            "c2_rotation_nn_deg",
+            "symmetry_alias_gap_deg",
+            "c2_neighbour_count_30deg",
+            "c2_neighbour_count_45deg",
+        ],
+        "acquisition": [
             "closest_axis_to_z_deg",
             "farthest_axis_to_z_deg",
             "beam_axis_alignment_max",
@@ -542,6 +631,9 @@ def _build_correlation_table(df_prompt_analysis):
             "euler_x",
             "euler_y",
             "euler_z",
+            "missing_wedge_anisotropy",
+            "freq_ratio_mid_high",
+            "gradient_energy",
         ],
         "position": [
             "z_norm",
@@ -559,9 +651,6 @@ def _build_correlation_table(df_prompt_analysis):
             "centre_ratio",
             "dc_penalty",
             "contrast",
-            "missing_wedge_anisotropy",
-            "freq_ratio_mid_high",
-            "gradient_energy",
             "mass_center_shift",
             "inertia_anisotropy",
             "radial_inner_outer_ratio",
@@ -657,8 +746,9 @@ def _build_effect_table(df_prompt_analysis, feature_list):
 
 def _run_pca_and_clustering(df_prompt_analysis):
     cluster_features = [
-        "closest_axis_to_z_deg",
-        "local_z_to_global_z_deg",
+        "c2_axis_to_global_z_deg",
+        "c2_rotation_nn_deg",
+        "symmetry_alias_gap_deg",
         "source_snr",
         "z_center_offset_abs",
         "dist_to_center_norm",
@@ -704,8 +794,9 @@ def _run_pca_and_clustering(df_prompt_analysis):
     cluster_summary_cols = [
         "recall_mean",
         "f1_mean",
-        "closest_axis_to_z_deg",
-        "local_z_to_global_z_deg",
+        "c2_axis_to_global_z_deg",
+        "c2_rotation_nn_deg",
+        "symmetry_alias_gap_deg",
         "source_snr",
         "quality_score",
         "missing_wedge_anisotropy",
@@ -732,22 +823,7 @@ def _plot_overview(df_prompt_analysis, df_corr, analysis_dir):
     fig, axes = plt.subplots(2, 2, figsize=(16, 12))
 
     scatter1 = axes[0, 0].scatter(
-        df_prompt_analysis["closest_axis_to_z_deg"],
-        df_prompt_analysis["recall_mean"],
-        c=df_prompt_analysis["source_snr"],
-        cmap="viridis",
-        s=80,
-        alpha=0.9,
-        edgecolors="black",
-        linewidths=0.3,
-    )
-    axes[0, 0].set_xlabel("Closest prompt axis to global Z (deg)")
-    axes[0, 0].set_ylabel("Mean recall")
-    axes[0, 0].set_title("Orientation to Z vs recall")
-    plt.colorbar(scatter1, ax=axes[0, 0], label="Prompt source SNR")
-
-    scatter2 = axes[0, 1].scatter(
-        df_prompt_analysis["quality_score"],
+        df_prompt_analysis["c2_axis_to_global_z_deg"],
         df_prompt_analysis["recall_mean"],
         c=df_prompt_analysis["missing_wedge_anisotropy"],
         cmap="magma",
@@ -756,29 +832,44 @@ def _plot_overview(df_prompt_analysis, df_corr, analysis_dir):
         edgecolors="black",
         linewidths=0.3,
     )
-    axes[0, 1].set_xlabel("Prompt quality score")
+    axes[0, 0].set_xlabel("Thyroglobulin C2 axis to global Z (deg)")
+    axes[0, 0].set_ylabel("Mean recall")
+    axes[0, 0].set_title("Symmetry axis orientation vs recall")
+    plt.colorbar(scatter1, ax=axes[0, 0], label="Fourier anisotropy proxy")
+
+    scatter2 = axes[0, 1].scatter(
+        df_prompt_analysis["missing_wedge_anisotropy"],
+        df_prompt_analysis["recall_mean"],
+        c=df_prompt_analysis["c2_axis_to_global_z_deg"],
+        cmap="viridis",
+        s=80,
+        alpha=0.9,
+        edgecolors="black",
+        linewidths=0.3,
+    )
+    axes[0, 1].set_xlabel("Missing-wedge anisotropy proxy")
     axes[0, 1].set_ylabel("Mean recall")
-    axes[0, 1].set_title("Prompt quality vs recall")
-    plt.colorbar(scatter2, ax=axes[0, 1], label="Fourier anisotropy proxy")
+    axes[0, 1].set_title("Acquisition anisotropy proxy vs recall")
+    plt.colorbar(scatter2, ax=axes[0, 1], label="C2 axis to global Z (deg)")
 
     scatter3 = axes[1, 0].scatter(
-        df_prompt_analysis["z_center_offset_abs"],
+        df_prompt_analysis["quality_score"],
         df_prompt_analysis["recall_mean"],
-        c=df_prompt_analysis["gradient_energy"],
+        c=df_prompt_analysis["source_snr"],
         cmap="plasma",
         s=80,
         alpha=0.9,
         edgecolors="black",
         linewidths=0.3,
     )
-    axes[1, 0].set_xlabel("|Z - center| (normalized)")
+    axes[1, 0].set_xlabel("Prompt quality score")
     axes[1, 0].set_ylabel("Mean recall")
-    axes[1, 0].set_title("Prompt Z offset vs recall")
-    plt.colorbar(scatter3, ax=axes[1, 0], label="Gradient energy")
+    axes[1, 0].set_title("Prompt quality vs recall")
+    plt.colorbar(scatter3, ax=axes[1, 0], label="Prompt source SNR")
 
     heatmap_df = df_prompt_analysis.copy()
     heatmap_df["orientation_bin"] = pd.cut(
-        heatmap_df["closest_axis_to_z_deg"],
+        heatmap_df["c2_axis_to_global_z_deg"],
         bins=[0, 15, 30, 45, 60, 75, 90],
         include_lowest=True,
     )
@@ -794,11 +885,11 @@ def _plot_overview(df_prompt_analysis, df_corr, analysis_dir):
         aggfunc="mean",
     )
     sns.heatmap(heatmap, annot=True, fmt=".3f", cmap="RdYlGn", ax=axes[1, 1])
-    axes[1, 1].set_title("Mean recall by source SNR and Z-orientation bins")
-    axes[1, 1].set_xlabel("Closest prompt axis to global Z (deg)")
+    axes[1, 1].set_title("Mean recall by source SNR and C2-axis bins")
+    axes[1, 1].set_xlabel("Thyroglobulin C2 axis to global Z (deg)")
     axes[1, 1].set_ylabel("Prompt source SNR bin")
 
-    fig.suptitle("CryoET prompt failure overview (first 125 prompts)", fontsize=16)
+    fig.suptitle("CryoET prompt failure overview (SO(3)/C2 + anisotropy proxies)", fontsize=16)
     fig.tight_layout()
     fig.savefig(analysis_dir / "rotational_issues_overview.png", dpi=150, bbox_inches="tight")
     plt.show()
@@ -896,7 +987,9 @@ def _plot_pca_clusters(df_clustered, cluster_summary, cluster_features, spectra_
 
     heat_cols = [
         "recall_mean",
-        "closest_axis_to_z_deg",
+        "c2_axis_to_global_z_deg",
+        "c2_rotation_nn_deg",
+        "symmetry_alias_gap_deg",
         "source_snr",
         "quality_score",
         "missing_wedge_anisotropy",
@@ -940,6 +1033,11 @@ def _summarize_findings(df_prompt_analysis, df_corr, cluster_summary, checkpoint
     print(f"Study subset: {len(df_prompt_analysis)} prompts (prompt_idx 0..{len(df_prompt_analysis) - 1})")
     print(f"Focus checkpoint: {checkpoint_type}_inc{increment}")
     print("Metric used as main failure signal: mean recall across the 5 validation tomograms")
+    print("\nAssumptions used in this study:")
+    print("  - Thyroglobulin is treated as a C2-symmetric particle.")
+    print("  - The prompt local Z axis is used as a proxy for the thyroglobulin C2 axis.")
+    print("  - Global Z is used as the acquisition anisotropy axis because tilt-axis metadata is not stored here.")
+    print("  - missing_wedge_anisotropy is a post-reconstruction Fourier proxy, not the exact acquisition operator.")
 
     def _print_top(group_name):
         subset = df_corr[df_corr["feature_group"] == group_name]
@@ -952,12 +1050,13 @@ def _summarize_findings(df_prompt_analysis, df_corr, cluster_summary, checkpoint
         )
 
     print("\nTop signals by family:")
-    for group_name in ["orientation", "quality", "position", "embedding", "response"]:
+    for group_name in ["symmetry", "acquisition", "quality", "position", "embedding", "response"]:
         _print_top(group_name)
 
-    orientation_corr, _ = safe_pearsonr(
-        df_prompt_analysis["closest_axis_to_z_deg"], df_prompt_analysis["recall_mean"]
+    symmetry_corr, _ = safe_pearsonr(
+        df_prompt_analysis["c2_axis_to_global_z_deg"], df_prompt_analysis["recall_mean"]
     )
+    alias_corr, _ = safe_pearsonr(df_prompt_analysis["symmetry_alias_gap_deg"], df_prompt_analysis["recall_mean"])
     snr_corr, _ = safe_pearsonr(df_prompt_analysis["source_snr"], df_prompt_analysis["recall_mean"])
     z_corr, _ = safe_pearsonr(df_prompt_analysis["z_center_offset_abs"], df_prompt_analysis["recall_mean"])
     wedge_corr, _ = safe_pearsonr(
@@ -965,17 +1064,25 @@ def _summarize_findings(df_prompt_analysis, df_corr, cluster_summary, checkpoint
     )
 
     print("\nHypothesis check:")
-    if np.isfinite(orientation_corr):
-        if orientation_corr > 0:
+    if np.isfinite(symmetry_corr):
+        if symmetry_corr > 0:
             print(
-                "  - Orientation vs Z: prompts whose frame is less aligned with global Z tend to "
-                "perform better, which is compatible with missing-wedge sensitivity around the tilt axis."
+                "  - C2 axis vs Z: prompts whose thyroglobulin symmetry axis is farther from global Z tend "
+                "to perform better, which is compatible with anisotropic acquisition around the poorly "
+                "sampled direction."
             )
         else:
             print(
-                "  - Orientation vs Z: prompts closer to global Z tend to perform better, so the "
-                "dominant issue is unlikely to be a simple missing-wedge alignment effect alone."
+                "  - C2 axis vs Z: prompts whose symmetry axis is closer to global Z tend to perform "
+                "better, so a simple symmetry-axis / missing-wedge story is not sufficient on its own."
             )
+    if np.isfinite(alias_corr):
+        direction = "worse" if alias_corr < 0 else "better"
+        print(
+            "  - Symmetry-collapse gap: "
+            f"recall_r={alias_corr:+.3f}. Large raw-vs-C2 nearest-neighbour gaps indicate prompts that look "
+            f"diverse in SO(3) but become close after quotienting by C2. Those prompts tend to perform {direction}."
+        )
     if np.isfinite(snr_corr):
         print(
             "  - Source SNR: "
@@ -1001,8 +1108,9 @@ def _summarize_findings(df_prompt_analysis, df_corr, cluster_summary, checkpoint
         "source_snr",
         "recall_mean",
         "f1_mean",
-        "closest_axis_to_z_deg",
-        "local_z_to_global_z_deg",
+        "c2_axis_to_global_z_deg",
+        "c2_rotation_nn_deg",
+        "symmetry_alias_gap_deg",
         "quality_score",
         "missing_wedge_anisotropy",
         "z_center_offset_abs",
@@ -1059,8 +1167,9 @@ def run_rotational_issues_analysis(
 
     df_corr = _build_correlation_table(df_prompt_analysis)
     effect_features = [
-        "closest_axis_to_z_deg",
-        "local_z_to_global_z_deg",
+        "c2_axis_to_global_z_deg",
+        "c2_rotation_nn_deg",
+        "symmetry_alias_gap_deg",
         "source_snr",
         "quality_score",
         "missing_wedge_anisotropy",
