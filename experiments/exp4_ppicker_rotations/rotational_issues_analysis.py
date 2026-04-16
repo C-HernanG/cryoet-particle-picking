@@ -23,6 +23,24 @@ GLOBAL_Z_AXIS = np.array([0.0, 0.0, 1.0], dtype=float)
 THYROGLOBULIN_C2_AXIS_LOCAL = np.array([0.0, 0.0, 1.0], dtype=float)
 THYROGLOBULIN_C2_ROTATION = Rotation.from_rotvec(np.pi * THYROGLOBULIN_C2_AXIS_LOCAL)
 
+CAUSAL_ROTATION_ACQUISITION_FEATURES = [
+    "c2_axis_to_global_z_deg",
+    "c2_rotation_nn_deg",
+    "symmetry_alias_gap_deg",
+    "missing_wedge_anisotropy",
+]
+CAUSAL_CONFOUNDER_FEATURES = [
+    "quality_score",
+    "dist_to_center_norm",
+    "edge_distance_norm",
+    "mass_center_shift",
+    "inertia_anisotropy",
+]
+CAUSAL_PERMUTATION_ITERATIONS = 1000
+CAUSAL_RANDOM_STATE = 42
+C2_NEAR_EQUIVALENCE_DEG = 20.0
+C2_ALIAS_RAW_DEG = 150.0
+
 
 def _to_numpy(x):
     if hasattr(x, "detach"):
@@ -756,6 +774,495 @@ def _build_effect_table(df_prompt_analysis, feature_list):
     return df_prompt_analysis, df_effects
 
 
+def _build_standardized_feature_frame(df, feature_names):
+    frames = []
+    active = []
+    for feat in feature_names:
+        if feat not in df.columns:
+            continue
+        values = pd.to_numeric(df[feat], errors="coerce")
+        if values.nunique(dropna=True) <= 1:
+            continue
+        std = values.std(ddof=0)
+        if not np.isfinite(std) or std < 1e-8:
+            continue
+        frames.append(((values - values.mean()) / std).rename(feat))
+        active.append(feat)
+
+    if not frames:
+        return pd.DataFrame(index=df.index), []
+    return pd.concat(frames, axis=1), active
+
+
+def _fit_ols_matrix(X, y, column_names):
+    X = np.asarray(X, dtype=float)
+    y = np.asarray(y, dtype=float).reshape(-1)
+
+    if X.ndim == 1:
+        X = X[:, None]
+    if len(X) != len(y):
+        raise ValueError("Design matrix and target have incompatible lengths.")
+
+    X_aug = np.column_stack([np.ones(len(y), dtype=float), X])
+    columns = ["intercept"] + list(column_names)
+
+    beta, _, _, _ = np.linalg.lstsq(X_aug, y, rcond=None)
+    fitted = X_aug @ beta
+    resid = y - fitted
+
+    sse = float(np.sum(resid**2))
+    sst = float(np.sum((y - y.mean()) ** 2))
+    rank = int(np.linalg.matrix_rank(X_aug))
+    df_resid = max(len(y) - rank, 1)
+    mse = sse / df_resid
+
+    xtx_inv = np.linalg.pinv(X_aug.T @ X_aug)
+    se = np.sqrt(np.maximum(np.diag(xtx_inv) * mse, 0.0))
+    with np.errstate(divide="ignore", invalid="ignore"):
+        t_stat = beta / se
+    p_values = 2 * stats.t.sf(np.abs(t_stat), df=df_resid)
+
+    term_df = pd.DataFrame(
+        {
+            "term": columns,
+            "coef": beta,
+            "std_error": se,
+            "t_stat": t_stat,
+            "p_value": p_values,
+        }
+    )
+
+    return {
+        "n_obs": int(len(y)),
+        "rank": rank,
+        "df_resid": int(df_resid),
+        "sse": sse,
+        "sst": sst,
+        "r2": float(1.0 - sse / (sst + 1e-12)),
+        "term_table": term_df,
+    }
+
+
+def _compare_nested_models(base_fit, full_fit):
+    delta_sse = max(base_fit["sse"] - full_fit["sse"], 0.0)
+    df_num = max(full_fit["rank"] - base_fit["rank"], 0)
+    df_den = max(full_fit["df_resid"], 1)
+
+    if df_num == 0:
+        f_stat = np.nan
+        p_value = np.nan
+    else:
+        numerator = delta_sse / df_num
+        denominator = full_fit["sse"] / df_den if full_fit["sse"] > 0 else np.nan
+        if not np.isfinite(denominator) or denominator <= 0:
+            f_stat = np.nan
+            p_value = np.nan
+        else:
+            f_stat = numerator / denominator
+            p_value = stats.f.sf(f_stat, df_num, df_den)
+
+    return {
+        "delta_r2": max(full_fit["r2"] - base_fit["r2"], 0.0),
+        "partial_r2": delta_sse / (base_fit["sse"] + 1e-12),
+        "joint_f": f_stat,
+        "joint_p": p_value,
+        "df_num": df_num,
+        "df_den": df_den,
+    }
+
+
+def _run_stratified_block_permutation(
+    base_X,
+    block_X,
+    y,
+    strata,
+    n_permutations,
+    random_state,
+    base_column_names,
+    block_column_names,
+):
+    base_fit = _fit_ols_matrix(base_X, y, base_column_names)
+    full_fit = _fit_ols_matrix(
+        np.column_stack([base_X, block_X]),
+        y,
+        list(base_column_names) + list(block_column_names),
+    )
+    observed = max(full_fit["r2"] - base_fit["r2"], 0.0)
+
+    strata = pd.Series(strata).astype(str).to_numpy()
+    unique_strata = np.unique(strata)
+    block_X = np.asarray(block_X, dtype=float)
+    exchangeable_counts = {stratum: int(np.sum(strata == stratum)) for stratum in unique_strata}
+    exchangeable_prompts = int(sum(size for size in exchangeable_counts.values() if size > 1))
+    exchangeable_strata = int(sum(size > 1 for size in exchangeable_counts.values()))
+
+    rng = np.random.default_rng(random_state)
+    perm_stats = np.zeros(n_permutations, dtype=float)
+
+    if block_X.size == 0 or exchangeable_prompts == 0:
+        perm_stats.fill(np.nan)
+    else:
+        for perm_idx in range(n_permutations):
+            permuted_block = block_X.copy()
+            for stratum in unique_strata:
+                indices = np.where(strata == stratum)[0]
+                if len(indices) <= 1:
+                    continue
+                shuffled = indices.copy()
+                rng.shuffle(shuffled)
+                permuted_block[indices] = block_X[shuffled]
+
+            perm_fit = _fit_ols_matrix(
+                np.column_stack([base_X, permuted_block]),
+                y,
+                list(base_column_names) + list(block_column_names),
+            )
+            perm_stats[perm_idx] = max(perm_fit["r2"] - base_fit["r2"], 0.0)
+
+    valid_perm = perm_stats[np.isfinite(perm_stats)]
+    if len(valid_perm) == 0:
+        p_value = np.nan
+        null_mean = np.nan
+        null_std = np.nan
+    else:
+        p_value = (1.0 + np.sum(valid_perm >= observed)) / (len(valid_perm) + 1.0)
+        null_mean = float(np.mean(valid_perm))
+        null_std = float(np.std(valid_perm, ddof=0))
+
+    summary = {
+        "observed_delta_r2": observed,
+        "permutation_p": p_value,
+        "null_mean": null_mean,
+        "null_std": null_std,
+        "n_permutations": int(len(valid_perm)),
+        "exchangeable_prompts": exchangeable_prompts,
+        "exchangeable_strata": exchangeable_strata,
+    }
+    return summary, perm_stats
+
+
+def _run_adjusted_rotation_checks(df_prompt_analysis):
+    required_cols = (
+        ["prompt_idx", "tomo_name", "f1_mean", "recall_mean"]
+        + CAUSAL_ROTATION_ACQUISITION_FEATURES
+        + CAUSAL_CONFOUNDER_FEATURES
+    )
+    available_cols = [col for col in required_cols if col in df_prompt_analysis.columns]
+    df_model = df_prompt_analysis[available_cols].copy()
+    df_model = df_model.replace([np.inf, -np.inf], np.nan).dropna().reset_index(drop=True)
+
+    if len(df_model) < 8:
+        empty = pd.DataFrame()
+        return empty, empty, empty, empty, empty
+
+    rotation_df, active_rotation = _build_standardized_feature_frame(
+        df_model, CAUSAL_ROTATION_ACQUISITION_FEATURES
+    )
+    confounder_df, active_confounders = _build_standardized_feature_frame(
+        df_model, CAUSAL_CONFOUNDER_FEATURES
+    )
+    tomo_dummies = pd.get_dummies(
+        df_model["tomo_name"].astype(str),
+        prefix="source_tomo",
+        drop_first=True,
+    ).astype(float)
+
+    base_design = pd.concat([confounder_df, tomo_dummies], axis=1)
+    full_design = pd.concat([base_design, rotation_df], axis=1)
+
+    if len(active_rotation) == 0 or full_design.shape[1] == 0:
+        empty = pd.DataFrame()
+        return empty, empty, empty, empty, empty
+
+    summary_rows = []
+    term_rows = []
+    permutation_rows = []
+    permutation_samples = []
+
+    for metric_name, seed_offset in [("f1_mean", 0), ("recall_mean", 1)]:
+        y = pd.to_numeric(df_model[metric_name], errors="coerce").to_numpy(dtype=float)
+        base_fit = _fit_ols_matrix(base_design.to_numpy(dtype=float), y, base_design.columns.tolist())
+        full_fit = _fit_ols_matrix(full_design.to_numpy(dtype=float), y, full_design.columns.tolist())
+        nested = _compare_nested_models(base_fit, full_fit)
+
+        perm_summary, perm_stats = _run_stratified_block_permutation(
+            base_X=base_design.to_numpy(dtype=float),
+            block_X=rotation_df.to_numpy(dtype=float),
+            y=y,
+            strata=df_model["tomo_name"],
+            n_permutations=CAUSAL_PERMUTATION_ITERATIONS,
+            random_state=CAUSAL_RANDOM_STATE + seed_offset,
+            base_column_names=base_design.columns.tolist(),
+            block_column_names=rotation_df.columns.tolist(),
+        )
+
+        summary_rows.append(
+            {
+                "metric": metric_name,
+                "n_obs": int(len(df_model)),
+                "rotation_feature_count": len(active_rotation),
+                "confounder_feature_count": len(active_confounders),
+                "source_tomo_dummy_count": int(tomo_dummies.shape[1]),
+                "r2_base": base_fit["r2"],
+                "r2_full": full_fit["r2"],
+                **nested,
+            }
+        )
+        permutation_rows.append({"metric": metric_name, **perm_summary})
+
+        term_df = full_fit["term_table"].copy()
+        term_df["metric"] = metric_name
+        term_df["term_group"] = "source_tomogram_fe"
+        term_df.loc[term_df["term"].isin(active_confounders), "term_group"] = "confounder"
+        term_df.loc[term_df["term"].isin(active_rotation), "term_group"] = "rotation_acquisition"
+        term_rows.append(term_df)
+
+        permutation_samples.append(
+            pd.DataFrame(
+                {
+                    "metric": metric_name,
+                    "perm_idx": np.arange(len(perm_stats), dtype=int),
+                    "delta_r2": perm_stats,
+                }
+            )
+        )
+
+    df_model_summary = pd.DataFrame(summary_rows)
+    df_term_table = pd.concat(term_rows, ignore_index=True)
+    df_permutation_summary = pd.DataFrame(permutation_rows)
+    df_permutation_samples = pd.concat(permutation_samples, ignore_index=True)
+
+    keep_groups = {"rotation_acquisition", "confounder"}
+    df_display_terms = df_term_table[
+        df_term_table["term_group"].isin(keep_groups) & (df_term_table["term"] != "intercept")
+    ].copy()
+    df_display_terms["abs_coef"] = df_display_terms["coef"].abs()
+    df_display_terms = df_display_terms.sort_values(["metric", "term_group", "abs_coef"], ascending=[True, True, False])
+
+    return df_model, df_model_summary, df_display_terms, df_permutation_summary, df_permutation_samples
+
+
+def _build_c2_consistency_tables(df_prompt_analysis):
+    required_cols = ["prompt_idx", "tomo_name", "q1", "q2", "q3", "q4", "f1_mean", "recall_mean"]
+    if any(col not in df_prompt_analysis.columns for col in required_cols):
+        empty = pd.DataFrame()
+        return empty, empty, empty
+
+    df_pairs_source = (
+        df_prompt_analysis[required_cols]
+        .copy()
+        .replace([np.inf, -np.inf], np.nan)
+        .dropna()
+        .sort_values("prompt_idx")
+        .reset_index(drop=True)
+    )
+    if len(df_pairs_source) < 2:
+        empty = pd.DataFrame()
+        return empty, empty, empty
+
+    quats = df_pairs_source[["q1", "q2", "q3", "q4"]].to_numpy(dtype=float)
+    rows = []
+    for i in range(len(df_pairs_source)):
+        for j in range(i + 1, len(df_pairs_source)):
+            raw_deg = quaternion_angular_distance_deg(quats[i], quats[j])
+            c2_deg = quaternion_angular_distance_c2_deg(quats[i], quats[j])
+            rows.append(
+                {
+                    "prompt_idx_a": int(df_pairs_source.loc[i, "prompt_idx"]),
+                    "prompt_idx_b": int(df_pairs_source.loc[j, "prompt_idx"]),
+                    "tomo_name_a": df_pairs_source.loc[i, "tomo_name"],
+                    "tomo_name_b": df_pairs_source.loc[j, "tomo_name"],
+                    "raw_rotation_deg": raw_deg,
+                    "c2_rotation_deg": c2_deg,
+                    "symmetry_alias_gap_deg": raw_deg - c2_deg,
+                    "f1_abs_diff": abs(df_pairs_source.loc[i, "f1_mean"] - df_pairs_source.loc[j, "f1_mean"]),
+                    "recall_abs_diff": abs(
+                        df_pairs_source.loc[i, "recall_mean"] - df_pairs_source.loc[j, "recall_mean"]
+                    ),
+                    "same_source_tomo": bool(
+                        df_pairs_source.loc[i, "tomo_name"] == df_pairs_source.loc[j, "tomo_name"]
+                    ),
+                }
+            )
+
+    df_pairs = pd.DataFrame(rows)
+    df_pairs["near_c2_pair"] = df_pairs["c2_rotation_deg"] <= C2_NEAR_EQUIVALENCE_DEG
+    df_pairs["alias_pair"] = df_pairs["near_c2_pair"] & (
+        df_pairs["raw_rotation_deg"] >= C2_ALIAS_RAW_DEG
+    )
+
+    groups = {
+        "all_pairs": df_pairs,
+        "near_c2_pairs": df_pairs[df_pairs["near_c2_pair"]],
+        "near_c2_alias_pairs": df_pairs[df_pairs["alias_pair"]],
+        "near_c2_non_alias_pairs": df_pairs[df_pairs["near_c2_pair"] & ~df_pairs["alias_pair"]],
+    }
+
+    summary_rows = []
+    for group_name, group_df in groups.items():
+        summary_rows.append(
+            {
+                "pair_group": group_name,
+                "pair_count": int(len(group_df)),
+                "mean_f1_abs_diff": pd.to_numeric(group_df["f1_abs_diff"], errors="coerce").mean(),
+                "median_f1_abs_diff": pd.to_numeric(group_df["f1_abs_diff"], errors="coerce").median(),
+                "mean_recall_abs_diff": pd.to_numeric(group_df["recall_abs_diff"], errors="coerce").mean(),
+                "median_recall_abs_diff": pd.to_numeric(group_df["recall_abs_diff"], errors="coerce").median(),
+                "mean_alias_gap_deg": pd.to_numeric(
+                    group_df["symmetry_alias_gap_deg"], errors="coerce"
+                ).mean(),
+                "same_tomo_fraction": pd.to_numeric(group_df["same_source_tomo"], errors="coerce").mean(),
+            }
+        )
+
+    near_pairs = groups["near_c2_pairs"]
+    alias_pairs = groups["near_c2_alias_pairs"]
+    non_alias_pairs = groups["near_c2_non_alias_pairs"]
+    diagnostics = pd.DataFrame(
+        [
+            {
+                "near_c2_f1_gap_spearman": safe_spearmanr(
+                    near_pairs["c2_rotation_deg"], near_pairs["f1_abs_diff"]
+                )[0]
+                if len(near_pairs) >= 3
+                else np.nan,
+                "near_c2_f1_gap_spearman_p": safe_spearmanr(
+                    near_pairs["c2_rotation_deg"], near_pairs["f1_abs_diff"]
+                )[1]
+                if len(near_pairs) >= 3
+                else np.nan,
+                "alias_vs_nonalias_f1_gap_p": safe_mannwhitneyu(
+                    alias_pairs["f1_abs_diff"], non_alias_pairs["f1_abs_diff"]
+                ),
+                "alias_vs_nonalias_recall_gap_p": safe_mannwhitneyu(
+                    alias_pairs["recall_abs_diff"], non_alias_pairs["recall_abs_diff"]
+                ),
+            }
+        ]
+    )
+
+    df_top_pairs = df_pairs[df_pairs["near_c2_pair"]].copy()
+    df_top_pairs["sort_key"] = (
+        df_top_pairs["f1_abs_diff"].fillna(-np.inf)
+        + 0.25 * df_top_pairs["symmetry_alias_gap_deg"].fillna(0.0) / 180.0
+    )
+    df_top_pairs = df_top_pairs.sort_values("sort_key", ascending=False).drop(columns="sort_key")
+
+    return pd.DataFrame(summary_rows), diagnostics, df_top_pairs
+
+
+def _plot_causal_rotation_checks(df_permutation_samples, df_permutation_summary, df_c2_pairs, analysis_dir):
+    has_perm = len(df_permutation_samples) > 0 and df_permutation_samples["delta_r2"].notna().any()
+    has_pairs = len(df_c2_pairs) > 0
+    if not has_perm and not has_pairs:
+        return
+
+    fig, axes = plt.subplots(1, 3, figsize=(18, 5))
+
+    for axis, metric_name in zip(axes[:2], ["f1_mean", "recall_mean"]):
+        metric_df = df_permutation_samples[
+            (df_permutation_samples["metric"] == metric_name) & df_permutation_samples["delta_r2"].notna()
+        ].copy()
+        if len(metric_df) == 0:
+            axis.set_visible(False)
+            continue
+        sns.histplot(metric_df["delta_r2"], bins=30, color="steelblue", ax=axis)
+        observed_row = df_permutation_summary[df_permutation_summary["metric"] == metric_name]
+        if len(observed_row) > 0:
+            observed = observed_row.iloc[0]["observed_delta_r2"]
+            axis.axvline(observed, color="crimson", linewidth=2, linestyle="--", label="Observed")
+            axis.legend()
+        axis.set_title(f"Permutation null for {metric_name}")
+        axis.set_xlabel("Rotation-block delta R^2")
+        axis.set_ylabel("Count")
+
+    if has_pairs:
+        scatter_df = df_c2_pairs[df_c2_pairs["near_c2_pair"]].copy()
+        if len(scatter_df) == 0:
+            axes[2].set_visible(False)
+        else:
+            scatter = axes[2].scatter(
+                scatter_df["c2_rotation_deg"],
+                scatter_df["f1_abs_diff"],
+                c=scatter_df["symmetry_alias_gap_deg"],
+                cmap="viridis",
+                s=60,
+                alpha=0.85,
+                edgecolors="black",
+                linewidths=0.3,
+            )
+            axes[2].set_title("Near-C2 pairs: F1 gap vs C2 distance")
+            axes[2].set_xlabel("SO(3)/C2 distance (deg)")
+            axes[2].set_ylabel("|Delta F1|")
+            plt.colorbar(scatter, ax=axes[2], label="Raw-vs-C2 alias gap (deg)")
+    else:
+        axes[2].set_visible(False)
+
+    fig.tight_layout()
+    fig.savefig(analysis_dir / "rotational_issues_causal_checks.png", dpi=150, bbox_inches="tight")
+    plt.show()
+
+
+def _summarize_causal_findings(df_model_summary, df_permutation_summary, df_c2_summary, df_c2_diagnostics):
+    if len(df_model_summary) == 0:
+        return
+
+    print("\nAdjusted rotation/acquisition block:")
+    for metric_name in ["f1_mean", "recall_mean"]:
+        model_row = df_model_summary[df_model_summary["metric"] == metric_name]
+        perm_row = df_permutation_summary[df_permutation_summary["metric"] == metric_name]
+        if len(model_row) == 0 or len(perm_row) == 0:
+            continue
+        model_row = model_row.iloc[0]
+        perm_row = perm_row.iloc[0]
+        print(
+            f"  - {metric_name}: delta_R2={model_row['delta_r2']:.4f}, "
+            f"partial_R2={model_row['partial_r2']:.4f}, "
+            f"joint_p={model_row['joint_p']:.4f}, "
+            f"perm_p={perm_row['permutation_p']:.4f}"
+        )
+        if np.isfinite(model_row["joint_p"]) and np.isfinite(perm_row["permutation_p"]):
+            if model_row["joint_p"] < 0.05 and perm_row["permutation_p"] < 0.05:
+                print(
+                    "    The rotation + acquisition block survives confounder adjustment and tomogram-stratified permutation."
+                )
+            else:
+                print(
+                    "    The rotation + acquisition block does not remain strong after adjustment or permutation control."
+                )
+
+    if len(df_c2_summary) == 0:
+        return
+
+    near_row = df_c2_summary[df_c2_summary["pair_group"] == "near_c2_pairs"]
+    alias_row = df_c2_summary[df_c2_summary["pair_group"] == "near_c2_alias_pairs"]
+    non_alias_row = df_c2_summary[df_c2_summary["pair_group"] == "near_c2_non_alias_pairs"]
+
+    print("\nC2 consistency check:")
+    if len(near_row) > 0:
+        near_row = near_row.iloc[0]
+        print(
+            f"  - Near-C2 pairs (<= {C2_NEAR_EQUIVALENCE_DEG:.0f} deg): "
+            f"n={int(near_row['pair_count'])}, mean |Delta F1|={near_row['mean_f1_abs_diff']:.4f}, "
+            f"mean |Delta recall|={near_row['mean_recall_abs_diff']:.4f}"
+        )
+    if len(alias_row) > 0 and len(non_alias_row) > 0:
+        alias_row = alias_row.iloc[0]
+        non_alias_row = non_alias_row.iloc[0]
+        print(
+            f"  - Alias-like near-C2 pairs (raw >= {C2_ALIAS_RAW_DEG:.0f} deg): "
+            f"mean |Delta F1|={alias_row['mean_f1_abs_diff']:.4f} vs "
+            f"{non_alias_row['mean_f1_abs_diff']:.4f} for non-alias near-C2 pairs"
+        )
+    if len(df_c2_diagnostics) > 0:
+        diag_row = df_c2_diagnostics.iloc[0]
+        print(
+            "    Diagnostic p-values: "
+            f"near-C2 Spearman p={diag_row['near_c2_f1_gap_spearman_p']:.4f}, "
+            f"alias-vs-nonalias F1 p={diag_row['alias_vs_nonalias_f1_gap_p']:.4f}"
+        )
+
+
 def _run_pca_and_clustering(df_prompt_analysis):
     cluster_features = [
         "c2_axis_to_global_z_deg",
@@ -1213,6 +1720,14 @@ def run_rotational_issues_analysis(
         on="prompt_idx",
         how="left",
     )
+    (
+        df_causal_model,
+        df_causal_summary,
+        df_causal_terms,
+        df_permutation_summary,
+        df_permutation_samples,
+    ) = _run_adjusted_rotation_checks(df_prompt_analysis)
+    df_c2_summary, df_c2_diagnostics, df_c2_top_pairs = _build_c2_consistency_tables(df_prompt_analysis)
 
     print("=" * 90)
     print("ROTATIONAL ISSUES ANALYSIS")
@@ -1248,14 +1763,62 @@ def run_rotational_issues_analysis(
     print("\nWorst-vs-best quartile effect sizes (quartiles defined by mean F1):")
     display(df_effects.head(15).round(4))
 
+    if len(df_causal_summary) > 0:
+        print("\nAdjusted causal model summary (rotation + acquisition block, F1 main / recall secondary):")
+        display(df_causal_summary.round(4))
+
+    if len(df_causal_terms) > 0:
+        print("\nAdjusted model coefficients (continuous terms only):")
+        display(df_causal_terms.drop(columns="abs_coef", errors="ignore").round(4))
+
+    if len(df_permutation_summary) > 0:
+        print("\nTomogram-stratified permutation test for the rotation + acquisition block:")
+        display(df_permutation_summary.round(4))
+
+    if len(df_c2_summary) > 0:
+        print("\nC2 consistency summary:")
+        display(df_c2_summary.round(4))
+
+    if len(df_c2_top_pairs) > 0:
+        print("\nMost inconsistent near-C2 prompt pairs:")
+        display(df_c2_top_pairs.head(12).round(4))
+
     _plot_overview(df_prompt_analysis, df_corr, analysis_dir)
     _plot_pca_clusters(df_clustered, cluster_summary, cluster_features, spectra_by_prompt, df_prompt_analysis, analysis_dir)
+    _plot_causal_rotation_checks(
+        df_permutation_samples,
+        df_permutation_summary,
+        df_c2_top_pairs,
+        analysis_dir,
+    )
     _summarize_findings(df_prompt_analysis, df_corr, cluster_summary, checkpoint_type, increment)
+    _summarize_causal_findings(
+        df_causal_summary,
+        df_permutation_summary,
+        df_c2_summary,
+        df_c2_diagnostics,
+    )
 
     df_prompt_analysis.to_csv(analysis_dir / "prompt_rotational_issue_features.csv", index=False)
     df_corr.to_csv(analysis_dir / "feature_correlations.csv", index=False)
     df_effects.to_csv(analysis_dir / "quartile_effect_sizes.csv", index=False)
     cluster_summary.to_csv(analysis_dir / "cluster_summary.csv", index=False)
+    if len(df_causal_model) > 0:
+        df_causal_model.to_csv(analysis_dir / "causal_rotation_model_dataset.csv", index=False)
+    if len(df_causal_summary) > 0:
+        df_causal_summary.to_csv(analysis_dir / "causal_rotation_model_summary.csv", index=False)
+    if len(df_causal_terms) > 0:
+        df_causal_terms.to_csv(analysis_dir / "causal_rotation_model_terms.csv", index=False)
+    if len(df_permutation_summary) > 0:
+        df_permutation_summary.to_csv(analysis_dir / "causal_rotation_permutation_summary.csv", index=False)
+    if len(df_permutation_samples) > 0:
+        df_permutation_samples.to_csv(analysis_dir / "causal_rotation_permutation_samples.csv", index=False)
+    if len(df_c2_summary) > 0:
+        df_c2_summary.to_csv(analysis_dir / "c2_consistency_summary.csv", index=False)
+    if len(df_c2_diagnostics) > 0:
+        df_c2_diagnostics.to_csv(analysis_dir / "c2_consistency_diagnostics.csv", index=False)
+    if len(df_c2_top_pairs) > 0:
+        df_c2_top_pairs.to_csv(analysis_dir / "c2_consistency_top_pairs.csv", index=False)
 
     return {
         "analysis_dir": analysis_dir,
@@ -1264,6 +1827,14 @@ def run_rotational_issues_analysis(
         "df_effects": df_effects,
         "df_clustered": df_clustered,
         "cluster_summary": cluster_summary,
+        "df_causal_model": df_causal_model,
+        "df_causal_summary": df_causal_summary,
+        "df_causal_terms": df_causal_terms,
+        "df_permutation_summary": df_permutation_summary,
+        "df_permutation_samples": df_permutation_samples,
+        "df_c2_summary": df_c2_summary,
+        "df_c2_diagnostics": df_c2_diagnostics,
+        "df_c2_top_pairs": df_c2_top_pairs,
         "pca_model": pca_model,
         "spectra_by_prompt": spectra_by_prompt,
     }
