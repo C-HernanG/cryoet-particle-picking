@@ -474,17 +474,23 @@ def _build_prompt_performance(df_focus):
 
     snr_rows = []
     for prompt_idx, group in df_focus.groupby("prompt_idx"):
-        corr, p_value = safe_pearsonr(group["val_tomo_snr"], group["recall"])
+        recall_corr, recall_p_value = safe_pearsonr(group["val_tomo_snr"], group["recall"])
+        f1_corr, f1_p_value = safe_pearsonr(group["val_tomo_snr"], group["f1"])
         if group["val_tomo_snr"].nunique() >= 2:
-            slope = stats.linregress(group["val_tomo_snr"], group["recall"]).slope
+            recall_slope = stats.linregress(group["val_tomo_snr"], group["recall"]).slope
+            f1_slope = stats.linregress(group["val_tomo_snr"], group["f1"]).slope
         else:
-            slope = np.nan
+            recall_slope = np.nan
+            f1_slope = np.nan
         snr_rows.append(
             {
                 "prompt_idx": prompt_idx,
-                "validation_snr_recall_r": corr,
-                "validation_snr_recall_p": p_value,
-                "validation_snr_recall_slope": slope,
+                "validation_snr_f1_r": f1_corr,
+                "validation_snr_f1_p": f1_p_value,
+                "validation_snr_f1_slope": f1_slope,
+                "validation_snr_recall_r": recall_corr,
+                "validation_snr_recall_p": recall_p_value,
+                "validation_snr_recall_slope": recall_slope,
             }
         )
 
@@ -668,6 +674,8 @@ def _build_correlation_table(df_prompt_analysis):
             "emb_pc2",
         ],
         "response": [
+            "validation_snr_f1_r",
+            "validation_snr_f1_slope",
             "validation_snr_recall_r",
             "validation_snr_recall_slope",
             "pred_gt_ratio_mean",
@@ -680,8 +688,9 @@ def _build_correlation_table(df_prompt_analysis):
         for feat in feats:
             if feat not in df_prompt_analysis.columns:
                 continue
-            pearson_recall, pearson_recall_p = safe_pearsonr(df_prompt_analysis[feat], df_prompt_analysis["recall_mean"])
             pearson_f1, pearson_f1_p = safe_pearsonr(df_prompt_analysis[feat], df_prompt_analysis["f1_mean"])
+            pearson_recall, pearson_recall_p = safe_pearsonr(df_prompt_analysis[feat], df_prompt_analysis["recall_mean"])
+            spearman_f1, spearman_f1_p = safe_spearmanr(df_prompt_analysis[feat], df_prompt_analysis["f1_mean"])
             spearman_recall, spearman_recall_p = safe_spearmanr(
                 df_prompt_analysis[feat], df_prompt_analysis["recall_mean"]
             )
@@ -689,31 +698,34 @@ def _build_correlation_table(df_prompt_analysis):
                 {
                     "feature_group": group_name,
                     "feature": feat,
+                    "pearson_f1": pearson_f1,
+                    "pearson_f1_p": pearson_f1_p,
+                    "spearman_f1": spearman_f1,
+                    "spearman_f1_p": spearman_f1_p,
                     "pearson_recall": pearson_recall,
                     "pearson_recall_p": pearson_recall_p,
                     "spearman_recall": spearman_recall,
                     "spearman_recall_p": spearman_recall_p,
-                    "pearson_f1": pearson_f1,
-                    "pearson_f1_p": pearson_f1_p,
                 }
             )
 
     df_corr = pd.DataFrame(rows)
     if len(df_corr) > 0:
+        df_corr["abs_pearson_f1"] = df_corr["pearson_f1"].abs()
         df_corr["abs_pearson_recall"] = df_corr["pearson_recall"].abs()
-        df_corr = df_corr.sort_values(["abs_pearson_recall", "feature_group"], ascending=[False, True])
+        df_corr = df_corr.sort_values(["abs_pearson_f1", "abs_pearson_recall", "feature_group"], ascending=[False, False, True])
     return df_corr
 
 
 def _build_effect_table(df_prompt_analysis, feature_list):
-    q25 = df_prompt_analysis["recall_mean"].quantile(0.25)
-    q75 = df_prompt_analysis["recall_mean"].quantile(0.75)
+    q25 = df_prompt_analysis["f1_mean"].quantile(0.25)
+    q75 = df_prompt_analysis["f1_mean"].quantile(0.75)
 
     df_prompt_analysis = df_prompt_analysis.copy()
     df_prompt_analysis["performance_group"] = np.where(
-        df_prompt_analysis["recall_mean"] <= q25,
+        df_prompt_analysis["f1_mean"] <= q25,
         "worst_quartile",
-        np.where(df_prompt_analysis["recall_mean"] >= q75, "best_quartile", "middle"),
+        np.where(df_prompt_analysis["f1_mean"] >= q75, "best_quartile", "middle"),
     )
 
     worst = df_prompt_analysis[df_prompt_analysis["performance_group"] == "worst_quartile"]
@@ -792,8 +804,8 @@ def _run_pca_and_clustering(df_prompt_analysis):
         df_model_valid["cluster_id"] = 0
 
     cluster_summary_cols = [
-        "recall_mean",
         "f1_mean",
+        "recall_mean",
         "c2_axis_to_global_z_deg",
         "c2_rotation_nn_deg",
         "symmetry_alias_gap_deg",
@@ -824,7 +836,7 @@ def _plot_overview(df_prompt_analysis, df_corr, analysis_dir):
 
     scatter1 = axes[0, 0].scatter(
         df_prompt_analysis["c2_axis_to_global_z_deg"],
-        df_prompt_analysis["recall_mean"],
+        df_prompt_analysis["f1_mean"],
         c=df_prompt_analysis["missing_wedge_anisotropy"],
         cmap="magma",
         s=80,
@@ -833,13 +845,13 @@ def _plot_overview(df_prompt_analysis, df_corr, analysis_dir):
         linewidths=0.3,
     )
     axes[0, 0].set_xlabel("Thyroglobulin C2 axis to global Z (deg)")
-    axes[0, 0].set_ylabel("Mean recall")
-    axes[0, 0].set_title("Symmetry axis orientation vs recall")
+    axes[0, 0].set_ylabel("Mean F1")
+    axes[0, 0].set_title("Symmetry axis orientation vs F1")
     plt.colorbar(scatter1, ax=axes[0, 0], label="Fourier anisotropy proxy")
 
     scatter2 = axes[0, 1].scatter(
         df_prompt_analysis["missing_wedge_anisotropy"],
-        df_prompt_analysis["recall_mean"],
+        df_prompt_analysis["f1_mean"],
         c=df_prompt_analysis["c2_axis_to_global_z_deg"],
         cmap="viridis",
         s=80,
@@ -848,13 +860,13 @@ def _plot_overview(df_prompt_analysis, df_corr, analysis_dir):
         linewidths=0.3,
     )
     axes[0, 1].set_xlabel("Missing-wedge anisotropy proxy")
-    axes[0, 1].set_ylabel("Mean recall")
-    axes[0, 1].set_title("Acquisition anisotropy proxy vs recall")
+    axes[0, 1].set_ylabel("Mean F1")
+    axes[0, 1].set_title("Acquisition anisotropy proxy vs F1")
     plt.colorbar(scatter2, ax=axes[0, 1], label="C2 axis to global Z (deg)")
 
     scatter3 = axes[1, 0].scatter(
         df_prompt_analysis["quality_score"],
-        df_prompt_analysis["recall_mean"],
+        df_prompt_analysis["f1_mean"],
         c=df_prompt_analysis["source_snr"],
         cmap="plasma",
         s=80,
@@ -863,8 +875,8 @@ def _plot_overview(df_prompt_analysis, df_corr, analysis_dir):
         linewidths=0.3,
     )
     axes[1, 0].set_xlabel("Prompt quality score")
-    axes[1, 0].set_ylabel("Mean recall")
-    axes[1, 0].set_title("Prompt quality vs recall")
+    axes[1, 0].set_ylabel("Mean F1")
+    axes[1, 0].set_title("Prompt quality vs F1")
     plt.colorbar(scatter3, ax=axes[1, 0], label="Prompt source SNR")
 
     heatmap_df = df_prompt_analysis.copy()
@@ -881,11 +893,11 @@ def _plot_overview(df_prompt_analysis, df_corr, analysis_dir):
     heatmap = heatmap_df.pivot_table(
         index="snr_bin",
         columns="orientation_bin",
-        values="recall_mean",
+        values="f1_mean",
         aggfunc="mean",
     )
     sns.heatmap(heatmap, annot=True, fmt=".3f", cmap="RdYlGn", ax=axes[1, 1])
-    axes[1, 1].set_title("Mean recall by source SNR and C2-axis bins")
+    axes[1, 1].set_title("Mean F1 by source SNR and C2-axis bins")
     axes[1, 1].set_xlabel("Thyroglobulin C2 axis to global Z (deg)")
     axes[1, 1].set_ylabel("Prompt source SNR bin")
 
@@ -899,37 +911,37 @@ def _plot_overview(df_prompt_analysis, df_corr, analysis_dir):
 
     sns.barplot(
         data=top_corr,
-        x="pearson_recall",
+        x="pearson_f1",
         y="feature",
         hue="feature_group",
         dodge=False,
         ax=axes2[0, 0],
     )
     axes2[0, 0].axvline(0.0, color="black", linewidth=1)
-    axes2[0, 0].set_title("Top recall correlations")
-    axes2[0, 0].set_xlabel("Pearson r with mean recall")
+    axes2[0, 0].set_title("Top F1 correlations")
+    axes2[0, 0].set_xlabel("Pearson r with mean F1")
     axes2[0, 0].set_ylabel("")
 
-    worst = df_prompt_analysis.nsmallest(10, "recall_mean")
-    best = df_prompt_analysis.nlargest(10, "recall_mean")
+    worst = df_prompt_analysis.nsmallest(10, "f1_mean")
+    best = df_prompt_analysis.nlargest(10, "f1_mean")
     for _, row in worst.iterrows():
         axes2[0, 1].scatter(
             row["prompt_idx"],
-            row["recall_mean"],
+            row["f1_mean"],
             color="crimson",
             s=55,
         )
     for _, row in best.iterrows():
         axes2[0, 1].scatter(
             row["prompt_idx"],
-            row["recall_mean"],
+            row["f1_mean"],
             color="darkgreen",
             s=55,
         )
-    axes2[0, 1].plot(df_prompt_analysis["prompt_idx"], df_prompt_analysis["recall_mean"], color="steelblue", alpha=0.5)
-    axes2[0, 1].set_title("Prompt recall profile (best and worst highlighted)")
+    axes2[0, 1].plot(df_prompt_analysis["prompt_idx"], df_prompt_analysis["f1_mean"], color="steelblue", alpha=0.5)
+    axes2[0, 1].set_title("Prompt F1 profile (best and worst highlighted)")
     axes2[0, 1].set_xlabel("Prompt index")
-    axes2[0, 1].set_ylabel("Mean recall")
+    axes2[0, 1].set_ylabel("Mean F1")
 
     worst_ids = set(worst["prompt_idx"].tolist())
     best_ids = set(best["prompt_idx"].tolist())
@@ -952,14 +964,14 @@ def _plot_pca_clusters(df_clustered, cluster_summary, cluster_features, spectra_
     scatter = axes[0, 0].scatter(
         df_clustered["feature_pc1"],
         df_clustered["feature_pc2"],
-        c=df_clustered["recall_mean"],
+        c=df_clustered["f1_mean"],
         cmap="viridis",
         s=90,
         alpha=0.9,
         edgecolors="black",
         linewidths=0.3,
     )
-    for _, row in df_clustered.nsmallest(8, "recall_mean").iterrows():
+    for _, row in df_clustered.nsmallest(8, "f1_mean").iterrows():
         axes[0, 0].annotate(
             f"P{int(row['prompt_idx'])}",
             (row["feature_pc1"], row["feature_pc2"]),
@@ -970,7 +982,7 @@ def _plot_pca_clusters(df_clustered, cluster_summary, cluster_features, spectra_
     axes[0, 0].set_title("PCA of theory-guided prompt descriptors")
     axes[0, 0].set_xlabel("PC1")
     axes[0, 0].set_ylabel("PC2")
-    plt.colorbar(scatter, ax=axes[0, 0], label="Mean recall")
+    plt.colorbar(scatter, ax=axes[0, 0], label="Mean F1")
 
     sns.scatterplot(
         data=df_clustered,
@@ -986,10 +998,11 @@ def _plot_pca_clusters(df_clustered, cluster_summary, cluster_features, spectra_
     axes[0, 1].set_ylabel("PC2")
 
     heat_cols = [
-        "recall_mean",
         "c2_axis_to_global_z_deg",
         "c2_rotation_nn_deg",
         "symmetry_alias_gap_deg",
+        "f1_mean",
+        "recall_mean",
         "source_snr",
         "quality_score",
         "missing_wedge_anisotropy",
@@ -1005,10 +1018,10 @@ def _plot_pca_clusters(df_clustered, cluster_summary, cluster_features, spectra_
     axes[1, 0].set_ylabel("Cluster")
 
     df_prompt_analysis = df_prompt_analysis.copy()
-    q25 = df_prompt_analysis["recall_mean"].quantile(0.25)
-    q75 = df_prompt_analysis["recall_mean"].quantile(0.75)
-    worst_ids = df_prompt_analysis[df_prompt_analysis["recall_mean"] <= q25]["prompt_idx"].tolist()
-    best_ids = df_prompt_analysis[df_prompt_analysis["recall_mean"] >= q75]["prompt_idx"].tolist()
+    q25 = df_prompt_analysis["f1_mean"].quantile(0.25)
+    q75 = df_prompt_analysis["f1_mean"].quantile(0.75)
+    worst_ids = df_prompt_analysis[df_prompt_analysis["f1_mean"] <= q25]["prompt_idx"].tolist()
+    best_ids = df_prompt_analysis[df_prompt_analysis["f1_mean"] >= q75]["prompt_idx"].tolist()
 
     if worst_ids:
         worst_spectrum = np.vstack([spectra_by_prompt[idx] for idx in worst_ids]).mean(axis=0)
@@ -1032,7 +1045,8 @@ def _summarize_findings(df_prompt_analysis, df_corr, cluster_summary, checkpoint
     print("=" * 90)
     print(f"Study subset: {len(df_prompt_analysis)} prompts (prompt_idx 0..{len(df_prompt_analysis) - 1})")
     print(f"Focus checkpoint: {checkpoint_type}_inc{increment}")
-    print("Metric used as main failure signal: mean recall across the 5 validation tomograms")
+    print("Main failure signal: mean F1 across the 5 validation tomograms")
+    print("Secondary safeguard metric: mean recall, so false-negative sensitivity remains visible")
     print("\nAssumptions used in this study:")
     print("  - Thyroglobulin is treated as a C2-symmetric particle.")
     print("  - The prompt local Z axis is used as a proxy for the thyroglobulin C2 axis.")
@@ -1046,68 +1060,76 @@ def _summarize_findings(df_prompt_analysis, df_corr, cluster_summary, checkpoint
         row = subset.iloc[0]
         print(
             f"  - Strongest {group_name:<10} signal: {row['feature']:<28} "
-            f"recall_r={row['pearson_recall']:+.3f} (p={row['pearson_recall_p']:.4f})"
+            f"f1_r={row['pearson_f1']:+.3f} (p={row['pearson_f1_p']:.4f}), "
+            f"recall_r={row['pearson_recall']:+.3f}"
         )
 
     print("\nTop signals by family:")
     for group_name in ["symmetry", "acquisition", "quality", "position", "embedding", "response"]:
         _print_top(group_name)
 
-    symmetry_corr, _ = safe_pearsonr(
-        df_prompt_analysis["c2_axis_to_global_z_deg"], df_prompt_analysis["recall_mean"]
-    )
-    alias_corr, _ = safe_pearsonr(df_prompt_analysis["symmetry_alias_gap_deg"], df_prompt_analysis["recall_mean"])
-    snr_corr, _ = safe_pearsonr(df_prompt_analysis["source_snr"], df_prompt_analysis["recall_mean"])
-    z_corr, _ = safe_pearsonr(df_prompt_analysis["z_center_offset_abs"], df_prompt_analysis["recall_mean"])
-    wedge_corr, _ = safe_pearsonr(
-        df_prompt_analysis["missing_wedge_anisotropy"], df_prompt_analysis["recall_mean"]
-    )
+    symmetry_f1_corr, _ = safe_pearsonr(df_prompt_analysis["c2_axis_to_global_z_deg"], df_prompt_analysis["f1_mean"])
+    symmetry_recall_corr, _ = safe_pearsonr(df_prompt_analysis["c2_axis_to_global_z_deg"], df_prompt_analysis["recall_mean"])
+    alias_f1_corr, _ = safe_pearsonr(df_prompt_analysis["symmetry_alias_gap_deg"], df_prompt_analysis["f1_mean"])
+    alias_recall_corr, _ = safe_pearsonr(df_prompt_analysis["symmetry_alias_gap_deg"], df_prompt_analysis["recall_mean"])
+    snr_f1_corr, _ = safe_pearsonr(df_prompt_analysis["source_snr"], df_prompt_analysis["f1_mean"])
+    snr_recall_corr, _ = safe_pearsonr(df_prompt_analysis["source_snr"], df_prompt_analysis["recall_mean"])
+    z_f1_corr, _ = safe_pearsonr(df_prompt_analysis["z_center_offset_abs"], df_prompt_analysis["f1_mean"])
+    z_recall_corr, _ = safe_pearsonr(df_prompt_analysis["z_center_offset_abs"], df_prompt_analysis["recall_mean"])
+    wedge_f1_corr, _ = safe_pearsonr(df_prompt_analysis["missing_wedge_anisotropy"], df_prompt_analysis["f1_mean"])
+    wedge_recall_corr, _ = safe_pearsonr(df_prompt_analysis["missing_wedge_anisotropy"], df_prompt_analysis["recall_mean"])
 
     print("\nHypothesis check:")
-    if np.isfinite(symmetry_corr):
-        if symmetry_corr > 0:
+    if np.isfinite(symmetry_f1_corr):
+        if symmetry_f1_corr > 0:
             print(
                 "  - C2 axis vs Z: prompts whose thyroglobulin symmetry axis is farther from global Z tend "
-                "to perform better, which is compatible with anisotropic acquisition around the poorly "
+                "to have higher F1, which is compatible with anisotropic acquisition around the poorly "
                 "sampled direction."
             )
         else:
             print(
-                "  - C2 axis vs Z: prompts whose symmetry axis is closer to global Z tend to perform "
-                "better, so a simple symmetry-axis / missing-wedge story is not sufficient on its own."
+                "  - C2 axis vs Z: prompts whose symmetry axis is closer to global Z tend to have higher F1, "
+                "so a simple symmetry-axis / missing-wedge story is not sufficient on its own."
             )
-    if np.isfinite(alias_corr):
-        direction = "worse" if alias_corr < 0 else "better"
+        print(
+            f"    Secondary recall check: recall_r={symmetry_recall_corr:+.3f}"
+        )
+    if np.isfinite(alias_f1_corr):
+        direction = "worse" if alias_f1_corr < 0 else "better"
         print(
             "  - Symmetry-collapse gap: "
-            f"recall_r={alias_corr:+.3f}. Large raw-vs-C2 nearest-neighbour gaps indicate prompts that look "
-            f"diverse in SO(3) but become close after quotienting by C2. Those prompts tend to perform {direction}."
+            f"f1_r={alias_f1_corr:+.3f}, recall_r={alias_recall_corr:+.3f}. Large raw-vs-C2 nearest-neighbour "
+            f"gaps indicate prompts that look diverse in SO(3) but become close after quotienting by C2. "
+            f"Those prompts tend to perform {direction}."
         )
-    if np.isfinite(snr_corr):
+    if np.isfinite(snr_f1_corr):
         print(
             "  - Source SNR: "
-            f"recall_r={snr_corr:+.3f}. This tests whether prompt failures are partly explained by the "
-            "quality of the tomogram used to extract the prompt."
+            f"f1_r={snr_f1_corr:+.3f}, recall_r={snr_recall_corr:+.3f}. This tests whether prompt failures "
+            "are partly explained by the quality of the tomogram used to extract the prompt."
         )
-    if np.isfinite(wedge_corr):
+    if np.isfinite(wedge_f1_corr):
         print(
             "  - Fourier anisotropy proxy: "
-            f"recall_r={wedge_corr:+.3f}. Large anisotropy is a practical proxy for wedge / tilt artefacts."
+            f"f1_r={wedge_f1_corr:+.3f}, recall_r={wedge_recall_corr:+.3f}. Large anisotropy is a practical "
+            "proxy for wedge / tilt artefacts."
         )
-    if np.isfinite(z_corr):
+    if np.isfinite(z_f1_corr):
         print(
             "  - Z-position: "
-            f"recall_r={z_corr:+.3f}. This checks whether prompts farther from the tomogram center along Z "
-            "behave worse, which would be consistent with depth / edge / thickness artefacts."
+            f"f1_r={z_f1_corr:+.3f}, recall_r={z_recall_corr:+.3f}. This checks whether prompts farther from "
+            "the tomogram center along Z behave worse, which would be consistent with depth / edge / "
+            "thickness artefacts."
         )
 
-    print("\nWorst prompts:")
+    print("\nWorst prompts by mean F1:")
     worst_cols = [
         "prompt_idx",
         "tomo_name",
         "source_snr",
-        "recall_mean",
         "f1_mean",
+        "recall_mean",
         "c2_axis_to_global_z_deg",
         "c2_rotation_nn_deg",
         "symmetry_alias_gap_deg",
@@ -1117,7 +1139,7 @@ def _summarize_findings(df_prompt_analysis, df_corr, cluster_summary, checkpoint
         "mass_center_shift",
     ]
     worst_cols = [c for c in worst_cols if c in df_prompt_analysis.columns]
-    display(df_prompt_analysis.nsmallest(12, "recall_mean")[worst_cols].round(4))
+    display(df_prompt_analysis.nsmallest(12, "f1_mean")[worst_cols].round(4))
 
     print("\nCluster summary:")
     display(cluster_summary.round(4))
@@ -1203,24 +1225,27 @@ def run_rotational_issues_analysis(
         print(f"Silhouette by k: {silhouette_by_k}")
     print(f"Cluster feature set: {cluster_features}")
 
-    print("\nTop recall correlations:")
+    print("\nTop F1 correlations (recall kept as secondary):")
     display(
         df_corr[
             [
                 "feature_group",
                 "feature",
+                "pearson_f1",
+                "pearson_f1_p",
+                "spearman_f1",
+                "spearman_f1_p",
                 "pearson_recall",
                 "pearson_recall_p",
                 "spearman_recall",
                 "spearman_recall_p",
-                "pearson_f1",
             ]
         ]
         .head(20)
         .round(4)
     )
 
-    print("\nWorst-vs-best quartile effect sizes:")
+    print("\nWorst-vs-best quartile effect sizes (quartiles defined by mean F1):")
     display(df_effects.head(15).round(4))
 
     _plot_overview(df_prompt_analysis, df_corr, analysis_dir)
