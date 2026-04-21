@@ -1353,9 +1353,9 @@ def _run_pca_and_clustering(df_prompt_analysis):
 def _plot_overview(df_prompt_analysis, df_corr, analysis_dir):
     sns.set_theme(style="whitegrid")
 
-    fig, axes = plt.subplots(1, 3, figsize=(24, 6))
+    fig, axes = plt.subplots(2, 2, figsize=(18, 12))
 
-    scatter = axes[0].scatter(
+    scatter = axes[0, 0].scatter(
         df_prompt_analysis["quality_score"],
         df_prompt_analysis["f1_mean"],
         c=df_prompt_analysis["source_snr"],
@@ -1365,10 +1365,10 @@ def _plot_overview(df_prompt_analysis, df_corr, analysis_dir):
         edgecolors="black",
         linewidths=0.3,
     )
-    axes[0].set_xlabel("Prompt quality score")
-    axes[0].set_ylabel("Mean F1")
-    axes[0].set_title("Prompt quality vs F1")
-    plt.colorbar(scatter, ax=axes[0], label="Prompt source SNR")
+    axes[0, 0].set_xlabel("Prompt quality score")
+    axes[0, 0].set_ylabel("Mean F1")
+    axes[0, 0].set_title("Prompt quality vs F1")
+    plt.colorbar(scatter, ax=axes[0, 0], label="Prompt source SNR")
 
     # Keep only the last four entries from the displayed top-F1 correlation ranking.
     top_corr = df_corr.head(10).tail(4).copy()
@@ -1378,12 +1378,12 @@ def _plot_overview(df_prompt_analysis, df_corr, analysis_dir):
         y="feature",
         hue="feature_group",
         dodge=False,
-        ax=axes[1],
+        ax=axes[0, 1],
     )
-    axes[1].axvline(0.0, color="black", linewidth=1)
-    axes[1].set_title("Top F1 correlations (last 4 ranked variables)")
-    axes[1].set_xlabel("Pearson r with mean F1")
-    axes[1].set_ylabel("")
+    axes[0, 1].axvline(0.0, color="black", linewidth=1)
+    axes[0, 1].set_title("Top F1 correlations (last 4 ranked variables)")
+    axes[0, 1].set_xlabel("Pearson r with mean F1")
+    axes[0, 1].set_ylabel("")
 
     structure_candidates = ["freq_ratio", "freq_ratio_mid_high"]
     centering_candidates = ["mass_center_shift", "centre_ratio"]
@@ -1420,10 +1420,13 @@ def _plot_overview(df_prompt_analysis, df_corr, analysis_dir):
         )
 
         scaled_features = StandardScaler().fit_transform(pca_features)
+        full_pca = PCA()
+        full_pca.fit(scaled_features)
+
         targeted_pca = PCA(n_components=2)
         pca_coords = targeted_pca.fit_transform(scaled_features)
 
-        pca_scatter = axes[2].scatter(
+        pca_scatter = axes[1, 0].scatter(
             pca_coords[:, 0],
             pca_coords[:, 1],
             c=pca_df["f1_mean"],
@@ -1434,20 +1437,32 @@ def _plot_overview(df_prompt_analysis, df_corr, analysis_dir):
             linewidths=0.3,
         )
         explained_var = targeted_pca.explained_variance_ratio_ * 100.0
-        axes[2].set_xlabel(f"PC1 ({explained_var[0]:.1f}% var)")
-        axes[2].set_ylabel(f"PC2 ({explained_var[1]:.1f}% var)")
-        axes[2].set_title("PCA: SNR, contrast, structure, centering, quaternions")
-        axes[2].text(
+        axes[1, 0].set_xlabel(f"PC1 ({explained_var[0]:.1f}% var)")
+        axes[1, 0].set_ylabel(f"PC2 ({explained_var[1]:.1f}% var)")
+        axes[1, 0].set_title("PCA: SNR, contrast, structure, centering, quaternions")
+        axes[1, 0].text(
             0.02,
             0.02,
             f"structure={structure_col}, centering={centering_col}",
-            transform=axes[2].transAxes,
+            transform=axes[1, 0].transAxes,
             fontsize=9,
             va="bottom",
         )
-        plt.colorbar(pca_scatter, ax=axes[2], label="Mean F1")
+        plt.colorbar(pca_scatter, ax=axes[1, 0], label="Mean F1")
+
+        full_explained = full_pca.explained_variance_ratio_ * 100.0
+        component_idx = np.arange(1, len(full_explained) + 1)
+        cumulative_explained = np.cumsum(full_explained)
+        axes[1, 1].bar(component_idx, full_explained, color="steelblue", alpha=0.85)
+        axes[1, 1].plot(component_idx, cumulative_explained, color="crimson", marker="o", linewidth=2)
+        axes[1, 1].set_xticks(component_idx)
+        axes[1, 1].set_xlabel("Principal component")
+        axes[1, 1].set_ylabel("Explained variance (%)")
+        axes[1, 1].set_title("PCA scree plot")
+        axes[1, 1].set_ylim(0, max(100, cumulative_explained.max() * 1.05))
     else:
-        axes[2].set_visible(False)
+        axes[1, 0].set_visible(False)
+        axes[1, 1].set_visible(False)
 
     fig.tight_layout()
     fig.savefig(analysis_dir / "rotational_issues_overview.png", dpi=150, bbox_inches="tight")
