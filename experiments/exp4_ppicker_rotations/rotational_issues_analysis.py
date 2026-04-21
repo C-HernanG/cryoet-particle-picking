@@ -1640,68 +1640,7 @@ def run_rotational_issues_analysis(
     ) = _run_adjusted_rotation_checks(df_prompt_analysis)
     df_c2_summary, df_c2_diagnostics, df_c2_top_pairs = _build_c2_consistency_tables(df_prompt_analysis)
 
-    print("=" * 90)
-    print("ROTATIONAL ISSUES ANALYSIS")
-    print("=" * 90)
-    print(f"Analysis directory: {analysis_dir}")
-    print(f"Prompts analyzed: {len(df_prompt_analysis)}")
-    print(f"Focus checkpoint: {checkpoint_type}_inc{increment}")
-    print(f"Tomogram shapes loaded: {len(tomo_shapes)}")
-    if silhouette_by_k:
-        print(f"Silhouette by k: {silhouette_by_k}")
-    print(f"Cluster feature set: {cluster_features}")
-
-    print("\nTop F1 correlations (recall kept as secondary):")
-    display(
-        df_corr[
-            [
-                "feature_group",
-                "feature",
-                "pearson_f1",
-                "pearson_f1_p",
-                "spearman_f1",
-                "spearman_f1_p",
-                "pearson_recall",
-                "pearson_recall_p",
-                "spearman_recall",
-                "spearman_recall_p",
-            ]
-        ]
-        .head(20)
-        .round(4)
-    )
-
-    print("\nWorst-vs-best quartile effect sizes (quartiles defined by mean F1):")
-    display(df_effects.head(15).round(4))
-
-    if len(df_causal_summary) > 0:
-        print("\nAdjusted causal model summary (rotation + acquisition block, F1 main / recall secondary):")
-        display(df_causal_summary.round(4))
-
-    if len(df_causal_terms) > 0:
-        print("\nAdjusted model coefficients (continuous terms only):")
-        display(df_causal_terms.drop(columns="abs_coef", errors="ignore").round(4))
-
-    if len(df_permutation_summary) > 0:
-        print("\nTomogram-stratified permutation test for the rotation + acquisition block:")
-        display(df_permutation_summary.round(4))
-
-    if len(df_c2_summary) > 0:
-        print("\nC2 consistency summary:")
-        display(df_c2_summary.round(4))
-
-    if len(df_c2_top_pairs) > 0:
-        print("\nMost inconsistent near-C2 prompt pairs:")
-        display(df_c2_top_pairs.head(12).round(4))
-
     _plot_overview(df_prompt_analysis, df_corr, analysis_dir)
-    _summarize_findings(df_prompt_analysis, df_corr, cluster_summary, checkpoint_type, increment)
-    _summarize_causal_findings(
-        df_causal_summary,
-        df_permutation_summary,
-        df_c2_summary,
-        df_c2_diagnostics,
-    )
 
     df_prompt_analysis.to_csv(analysis_dir / "prompt_rotational_issue_features.csv", index=False)
     df_corr.to_csv(analysis_dir / "feature_correlations.csv", index=False)
