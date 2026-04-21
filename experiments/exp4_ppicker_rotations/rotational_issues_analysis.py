@@ -109,6 +109,20 @@ def _normalize_quaternion(q):
     return q / norm
 
 
+def _canonicalize_quaternion_array(quat_array):
+    quat_array = np.asarray(quat_array, dtype=float)
+    if quat_array.ndim != 2 or quat_array.shape[1] != 4:
+        raise ValueError("Expected quaternion array with shape (N, 4).")
+
+    quat_array = quat_array / np.clip(np.linalg.norm(quat_array, axis=1, keepdims=True), 1e-8, None)
+    signs = np.ones((len(quat_array), 1), dtype=float)
+    for idx, row in enumerate(quat_array):
+        non_zero = np.flatnonzero(np.abs(row) > 1e-12)
+        if len(non_zero) > 0 and row[non_zero[0]] < 0:
+            signs[idx, 0] = -1.0
+    return quat_array * signs
+
+
 def rotation_geodesic_distance_deg(rot_a, rot_b):
     return float(np.degrees((rot_a.inv() * rot_b).magnitude()))
 
@@ -1339,7 +1353,7 @@ def _run_pca_and_clustering(df_prompt_analysis):
 def _plot_overview(df_prompt_analysis, df_corr, analysis_dir):
     sns.set_theme(style="whitegrid")
 
-    fig, axes = plt.subplots(1, 2, figsize=(16, 6))
+    fig, axes = plt.subplots(1, 3, figsize=(24, 6))
 
     scatter = axes[0].scatter(
         df_prompt_analysis["quality_score"],
@@ -1370,6 +1384,70 @@ def _plot_overview(df_prompt_analysis, df_corr, analysis_dir):
     axes[1].set_title("Top F1 correlations (last 4 ranked variables)")
     axes[1].set_xlabel("Pearson r with mean F1")
     axes[1].set_ylabel("")
+
+    structure_candidates = ["freq_ratio", "freq_ratio_mid_high"]
+    centering_candidates = ["mass_center_shift", "centre_ratio"]
+    structure_col = next((col for col in structure_candidates if col in df_prompt_analysis.columns), None)
+    centering_col = next((col for col in centering_candidates if col in df_prompt_analysis.columns), None)
+
+    pca_required_cols = ["prompt_idx", "f1_mean", "source_snr", "contrast", "q1", "q2", "q3", "q4"]
+    if structure_col is not None:
+        pca_required_cols.append(structure_col)
+    if centering_col is not None:
+        pca_required_cols.append(centering_col)
+
+    pca_df = (
+        df_prompt_analysis[pca_required_cols]
+        .copy()
+        .replace([np.inf, -np.inf], np.nan)
+        .dropna()
+    )
+
+    if len(pca_df) >= 2 and structure_col is not None and centering_col is not None:
+        quat_array = _canonicalize_quaternion_array(pca_df[["q1", "q2", "q3", "q4"]].to_numpy(dtype=float))
+        pca_features = pd.DataFrame(
+            {
+                "source_snr": pd.to_numeric(pca_df["source_snr"], errors="coerce").to_numpy(dtype=float),
+                "contrast": pd.to_numeric(pca_df["contrast"], errors="coerce").to_numpy(dtype=float),
+                "structure_proxy": pd.to_numeric(pca_df[structure_col], errors="coerce").to_numpy(dtype=float),
+                "centering_proxy": pd.to_numeric(pca_df[centering_col], errors="coerce").to_numpy(dtype=float),
+                "quat_q1": quat_array[:, 0],
+                "quat_q2": quat_array[:, 1],
+                "quat_q3": quat_array[:, 2],
+                "quat_q4": quat_array[:, 3],
+            },
+            index=pca_df.index,
+        )
+
+        scaled_features = StandardScaler().fit_transform(pca_features)
+        targeted_pca = PCA(n_components=2)
+        pca_coords = targeted_pca.fit_transform(scaled_features)
+
+        pca_scatter = axes[2].scatter(
+            pca_coords[:, 0],
+            pca_coords[:, 1],
+            c=pca_df["f1_mean"],
+            cmap="viridis",
+            s=80,
+            alpha=0.9,
+            edgecolors="black",
+            linewidths=0.3,
+        )
+        explained_var = targeted_pca.explained_variance_ratio_ * 100.0
+        axes[2].set_xlabel(f"PC1 ({explained_var[0]:.1f}% var)")
+        axes[2].set_ylabel(f"PC2 ({explained_var[1]:.1f}% var)")
+        axes[2].set_title("PCA: SNR, contrast, structure, centering, quaternions")
+        axes[2].text(
+            0.02,
+            0.02,
+            f"structure={structure_col}, centering={centering_col}",
+            transform=axes[2].transAxes,
+            fontsize=9,
+            va="bottom",
+        )
+        plt.colorbar(pca_scatter, ax=axes[2], label="Mean F1")
+    else:
+        axes[2].set_visible(False)
 
     fig.tight_layout()
     fig.savefig(analysis_dir / "rotational_issues_overview.png", dpi=150, bbox_inches="tight")
