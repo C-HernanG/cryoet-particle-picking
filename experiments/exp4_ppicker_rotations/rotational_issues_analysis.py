@@ -1339,39 +1339,9 @@ def _run_pca_and_clustering(df_prompt_analysis):
 def _plot_overview(df_prompt_analysis, df_corr, analysis_dir):
     sns.set_theme(style="whitegrid")
 
-    fig, axes = plt.subplots(2, 2, figsize=(16, 12))
+    fig, axes = plt.subplots(1, 2, figsize=(16, 6))
 
-    scatter1 = axes[0, 0].scatter(
-        df_prompt_analysis["c2_axis_to_global_z_deg"],
-        df_prompt_analysis["f1_mean"],
-        c=df_prompt_analysis["missing_wedge_anisotropy"],
-        cmap="magma",
-        s=80,
-        alpha=0.9,
-        edgecolors="black",
-        linewidths=0.3,
-    )
-    axes[0, 0].set_xlabel("Thyroglobulin C2 axis to global Z (deg)")
-    axes[0, 0].set_ylabel("Mean F1")
-    axes[0, 0].set_title("Symmetry axis orientation vs F1")
-    plt.colorbar(scatter1, ax=axes[0, 0], label="Fourier anisotropy proxy")
-
-    scatter2 = axes[0, 1].scatter(
-        df_prompt_analysis["missing_wedge_anisotropy"],
-        df_prompt_analysis["f1_mean"],
-        c=df_prompt_analysis["c2_axis_to_global_z_deg"],
-        cmap="viridis",
-        s=80,
-        alpha=0.9,
-        edgecolors="black",
-        linewidths=0.3,
-    )
-    axes[0, 1].set_xlabel("Missing-wedge anisotropy proxy")
-    axes[0, 1].set_ylabel("Mean F1")
-    axes[0, 1].set_title("Acquisition anisotropy proxy vs F1")
-    plt.colorbar(scatter2, ax=axes[0, 1], label="C2 axis to global Z (deg)")
-
-    scatter3 = axes[1, 0].scatter(
+    scatter = axes[0].scatter(
         df_prompt_analysis["quality_score"],
         df_prompt_analysis["f1_mean"],
         c=df_prompt_analysis["source_snr"],
@@ -1381,88 +1351,29 @@ def _plot_overview(df_prompt_analysis, df_corr, analysis_dir):
         edgecolors="black",
         linewidths=0.3,
     )
-    axes[1, 0].set_xlabel("Prompt quality score")
-    axes[1, 0].set_ylabel("Mean F1")
-    axes[1, 0].set_title("Prompt quality vs F1")
-    plt.colorbar(scatter3, ax=axes[1, 0], label="Prompt source SNR")
+    axes[0].set_xlabel("Prompt quality score")
+    axes[0].set_ylabel("Mean F1")
+    axes[0].set_title("Prompt quality vs F1")
+    plt.colorbar(scatter, ax=axes[0], label="Prompt source SNR")
 
-    heatmap_df = df_prompt_analysis.copy()
-    heatmap_df["orientation_bin"] = pd.cut(
-        heatmap_df["c2_axis_to_global_z_deg"],
-        bins=[0, 15, 30, 45, 60, 75, 90],
-        include_lowest=True,
-    )
-    heatmap_df["snr_bin"] = pd.qcut(
-        heatmap_df["source_snr"],
-        q=min(3, heatmap_df["source_snr"].nunique()),
-        duplicates="drop",
-    )
-    heatmap = heatmap_df.pivot_table(
-        index="snr_bin",
-        columns="orientation_bin",
-        values="f1_mean",
-        aggfunc="mean",
-    )
-    sns.heatmap(heatmap, annot=True, fmt=".3f", cmap="RdYlGn", ax=axes[1, 1])
-    axes[1, 1].set_title("Mean F1 by source SNR and C2-axis bins")
-    axes[1, 1].set_xlabel("Thyroglobulin C2 axis to global Z (deg)")
-    axes[1, 1].set_ylabel("Prompt source SNR bin")
-
-    fig.suptitle("CryoET prompt failure overview (SO(3)/C2 + anisotropy proxies)", fontsize=16)
-    fig.tight_layout()
-    fig.savefig(analysis_dir / "rotational_issues_overview.png", dpi=150, bbox_inches="tight")
-    plt.show()
-
-    top_corr = df_corr.head(10).copy()
-    fig2, axes2 = plt.subplots(2, 2, figsize=(17, 12))
-
+    # Keep only the last four entries from the displayed top-F1 correlation ranking.
+    top_corr = df_corr.head(10).tail(4).copy()
     sns.barplot(
         data=top_corr,
         x="pearson_f1",
         y="feature",
         hue="feature_group",
         dodge=False,
-        ax=axes2[0, 0],
+        ax=axes[1],
     )
-    axes2[0, 0].axvline(0.0, color="black", linewidth=1)
-    axes2[0, 0].set_title("Top F1 correlations")
-    axes2[0, 0].set_xlabel("Pearson r with mean F1")
-    axes2[0, 0].set_ylabel("")
+    axes[1].axvline(0.0, color="black", linewidth=1)
+    axes[1].set_title("Top F1 correlations (last 4 ranked variables)")
+    axes[1].set_xlabel("Pearson r with mean F1")
+    axes[1].set_ylabel("")
 
-    worst = df_prompt_analysis.nsmallest(10, "f1_mean")
-    best = df_prompt_analysis.nlargest(10, "f1_mean")
-    for _, row in worst.iterrows():
-        axes2[0, 1].scatter(
-            row["prompt_idx"],
-            row["f1_mean"],
-            color="crimson",
-            s=55,
-        )
-    for _, row in best.iterrows():
-        axes2[0, 1].scatter(
-            row["prompt_idx"],
-            row["f1_mean"],
-            color="darkgreen",
-            s=55,
-        )
-    axes2[0, 1].plot(df_prompt_analysis["prompt_idx"], df_prompt_analysis["f1_mean"], color="steelblue", alpha=0.5)
-    axes2[0, 1].set_title("Prompt F1 profile (best and worst highlighted)")
-    axes2[0, 1].set_xlabel("Prompt index")
-    axes2[0, 1].set_ylabel("Mean F1")
-
-    worst_ids = set(worst["prompt_idx"].tolist())
-    best_ids = set(best["prompt_idx"].tolist())
-    worst_spectra = [row for idx, row in worst["prompt_idx"].items()]
-    best_spectra = [row for idx, row in best["prompt_idx"].items()]
-    # The actual spectra are added by the caller in a separate panel.
-    axes2[1, 0].set_visible(False)
-    axes2[1, 1].set_visible(False)
-
-    fig2.tight_layout()
-    fig2.savefig(analysis_dir / "rotational_issues_correlations.png", dpi=150, bbox_inches="tight")
+    fig.tight_layout()
+    fig.savefig(analysis_dir / "rotational_issues_overview.png", dpi=150, bbox_inches="tight")
     plt.show()
-
-    return worst_ids, best_ids
 
 
 def _plot_pca_clusters(df_clustered, cluster_summary, cluster_features, spectra_by_prompt, df_prompt_analysis, analysis_dir):
@@ -1784,13 +1695,6 @@ def run_rotational_issues_analysis(
         display(df_c2_top_pairs.head(12).round(4))
 
     _plot_overview(df_prompt_analysis, df_corr, analysis_dir)
-    _plot_pca_clusters(df_clustered, cluster_summary, cluster_features, spectra_by_prompt, df_prompt_analysis, analysis_dir)
-    _plot_causal_rotation_checks(
-        df_permutation_samples,
-        df_permutation_summary,
-        df_c2_top_pairs,
-        analysis_dir,
-    )
     _summarize_findings(df_prompt_analysis, df_corr, cluster_summary, checkpoint_type, increment)
     _summarize_causal_findings(
         df_causal_summary,
