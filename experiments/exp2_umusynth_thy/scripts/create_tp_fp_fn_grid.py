@@ -9,10 +9,10 @@ distance threshold as the experiment notebook, and renders a grid with:
   - rows: base / fine-tuned
   - columns: TP (green), FP (red), FN (yellow)
 
-By default, the script auto-selects a representative tomogram:
-  1. prefer tomograms where both rows have non-empty TP/FP/FN sets
-  2. among those, choose the one with the highest fine-tuned F1
-  3. otherwise, choose the tomogram with the largest F1 improvement
+The displayed z slice is shared across both rows and is selected from the
+predicted coordinates themselves so all six panels use the same slice. By
+default, each row renders its own saved `full_segmentation_output/*.pt`
+volume directly, so the script can work straight from the EXP2 outputs.
 
 Usage:
     conda activate propicker
@@ -24,13 +24,11 @@ Usage:
 from __future__ import annotations
 
 import argparse
-import io
 import os
-import pickle
 import sys
 import warnings
-import zipfile
 from pathlib import Path
+from typing import Any
 
 os.environ.setdefault("MPLCONFIGDIR", "/tmp/cryoet_matplotlib")
 
@@ -39,7 +37,6 @@ import matplotlib
 matplotlib.use("Agg")
 
 import matplotlib.pyplot as plt
-import mrcfile
 import numpy as np
 
 
@@ -103,9 +100,9 @@ def parse_args() -> argparse.Namespace:
         choices=("slice", "mean", "max"),
         default="slice",
         help=(
-            "Background mode. 'slice' uses the exact notebook-selected z slice "
-            "from the localization map for each row. 'mean'/'max' keep the "
-            "whole-volume XY projection."
+            "Background mode. 'slice' renders a shared XY slice selected from "
+            "the predicted coordinates. 'mean'/'max' keep the whole-volume XY "
+            "projection while still plotting the matched coordinates."
         ),
     )
     parser.add_argument(
@@ -113,9 +110,19 @@ def parse_args() -> argparse.Namespace:
         type=int,
         default=0,
         help=(
-            "Half-width in z around the notebook-selected slice used to decide "
-            "which points are shown. Default 0 means only points whose rounded "
-            "z matches the selected slice are displayed."
+            "Half-width in z around the shared slice used to decide which points "
+            "are shown. Default 0 means only points whose rounded z matches the "
+            "selected slice are displayed."
+        ),
+    )
+    parser.add_argument(
+        "--background-source",
+        choices=("pt", "tomo"),
+        default="pt",
+        help=(
+            "Background volume source. 'pt' uses each row's saved "
+            "full_segmentation_output/<tomo>.pt directly. 'tomo' uses the "
+            "original or preprocessed tomogram volume."
         ),
     )
     parser.add_argument(
@@ -149,7 +156,11 @@ def load_predicted_coords(path: Path) -> np.ndarray:
     if not path.exists() or path.stat().st_size == 0:
         return np.empty((0, 3), dtype=float)
 
-    coords = np.loadtxt(path, delimiter="\t", dtype=float)
+    try:
+        coords = np.loadtxt(path, delimiter="\t", dtype=float)
+    except ValueError:
+        return np.empty((0, 3), dtype=float)
+
     coords = np.atleast_2d(coords)
     if coords.shape[1] >= 4:
         return coords[:, 1:4]
@@ -161,7 +172,11 @@ def pairwise_distances(a: np.ndarray, b: np.ndarray) -> np.ndarray:
     return np.sqrt(np.sum(deltas * deltas, axis=2))
 
 
-def classify_predictions(gt_coords: np.ndarray, pred_coords: np.ndarray, distance_thresh: float) -> dict[str, np.ndarray | float | int]:
+def classify_predictions(
+    gt_coords: np.ndarray,
+    pred_coords: np.ndarray,
+    distance_thresh: float,
+) -> dict[str, Any]:
     matched_gt: set[int] = set()
     matched_pred: set[int] = set()
 
@@ -198,6 +213,8 @@ def classify_predictions(gt_coords: np.ndarray, pred_coords: np.ndarray, distanc
         "precision": precision,
         "recall": recall,
         "f1": f1,
+        "pred_coords": pred_coords,
+        "gt_coords": gt_coords,
         "TP": pred_coords[matched_pred_indices] if tp else np.empty((0, 3), dtype=float),
         "FP": pred_coords[unmatched_pred_indices] if fp else np.empty((0, 3), dtype=float),
         "FN": gt_coords[unmatched_gt_indices] if fn else np.empty((0, 3), dtype=float),
@@ -211,8 +228,8 @@ def available_tomos(run_dir: Path) -> list[str]:
     return sorted(path.stem for path in coords_dir.glob("*.coords"))
 
 
-def evaluate_run(run_dir: Path, coords_dir: Path) -> dict[str, dict[str, np.ndarray | float | int]]:
-    results: dict[str, dict[str, np.ndarray | float | int]] = {}
+def evaluate_run(run_dir: Path, coords_dir: Path) -> dict[str, dict[str, Any]]:
+    results: dict[str, dict[str, Any]] = {}
     pred_dir = run_dir / "PredictedLabels" / "Coords_All"
 
     for tomo_name in available_tomos(run_dir):
@@ -230,14 +247,14 @@ def evaluate_run(run_dir: Path, coords_dir: Path) -> dict[str, dict[str, np.ndar
 
 
 def select_representative_tomo(
-    base_results: dict[str, dict[str, np.ndarray | float | int]],
-    finetuned_results: dict[str, dict[str, np.ndarray | float | int]],
+    base_results: dict[str, dict[str, Any]],
+    finetuned_results: dict[str, dict[str, Any]],
 ) -> str:
     common_tomos = sorted(set(base_results) & set(finetuned_results))
     if not common_tomos:
         raise RuntimeError("No shared tomograms found between baseline and fine-tuned results.")
 
-    def has_all_panels(result: dict[str, np.ndarray | float | int]) -> bool:
+    def has_all_panels(result: dict[str, Any]) -> bool:
         return all(len(result[label]) > 0 for label, _ in PANEL_SPECS)
 
     complete_candidates = [
@@ -263,7 +280,7 @@ def select_representative_tomo(
     )
 
 
-def find_volume_path(tomo_name: str, base_dir: Path, finetuned_dir: Path) -> tuple[Path, str]:
+def find_volume_path(tomo_name: str, base_dir: Path, finetuned_dir: Path) -> tuple[Path | None, str]:
     candidates = (
         (UMU_SYNTH_TOMOS_DIR / f"{tomo_name}.mrc", "original"),
         (finetuned_dir / "raw_data" / f"{tomo_name}.mrc", "raw_data"),
@@ -274,14 +291,19 @@ def find_volume_path(tomo_name: str, base_dir: Path, finetuned_dir: Path) -> tup
     for candidate, source_kind in candidates:
         if candidate.exists():
             return candidate, source_kind
+    return None, "blank"
 
-    raise FileNotFoundError(
-        "Could not locate a tomogram volume for "
-        f"{tomo_name}. Checked: {', '.join(str(path) for path, _ in candidates)}"
-    )
+
+def find_locmap_path(run_dir: Path, tomo_name: str) -> Path | None:
+    locmap_path = run_dir / "full_segmentation_output" / f"{tomo_name}.pt"
+    if locmap_path.exists():
+        return locmap_path
+    return None
 
 
 def load_volume(volume_path: Path, source_kind: str) -> np.ndarray:
+    import mrcfile
+
     with mrcfile.open(volume_path, permissive=True) as mrc:
         volume = np.asarray(mrc.data, dtype=np.float32)
 
@@ -292,100 +314,72 @@ def load_volume(volume_path: Path, source_kind: str) -> np.ndarray:
     return volume
 
 
-def find_locmap_path(run_dir: Path, tomo_name: str) -> Path:
-    locmap_path = run_dir / "full_segmentation_output" / f"{tomo_name}.pt"
-    if not locmap_path.exists():
-        raise FileNotFoundError(f"Localization map not found: {locmap_path}")
-    return locmap_path
+def load_pt_volume(locmap_path: Path) -> np.ndarray:
+    import torch
 
+    tensor = torch.load(locmap_path, map_location="cpu")
 
-def storage_dtype_from_pickle_name(name: str) -> np.dtype:
-    dtype_map = {
-        "FloatStorage": np.float32,
-        "DoubleStorage": np.float64,
-        "HalfStorage": np.float16,
-        "LongStorage": np.int64,
-        "IntStorage": np.int32,
-        "ShortStorage": np.int16,
-        "CharStorage": np.int8,
-        "ByteStorage": np.uint8,
-        "BoolStorage": np.bool_,
-    }
-    if name not in dtype_map:
-        raise RuntimeError(f"Unsupported storage type in locmap pickle: {name}")
-    return np.dtype(dtype_map[name])
-
-
-def rebuild_tensor_metadata(storage, storage_offset, size, stride, requires_grad, backward_hooks):
-    return {
-        "storage": storage,
-        "storage_offset": storage_offset,
-        "size": tuple(size),
-        "stride": tuple(stride),
-    }
-
-
-class TorchArchiveMetadataUnpickler(pickle.Unpickler):
-    def find_class(self, module: str, name: str):
-        if module == "torch._utils" and name == "_rebuild_tensor_v2":
-            return rebuild_tensor_metadata
-        if module == "collections" and name == "OrderedDict":
-            return dict
-        if module == "torch" and name.endswith("Storage"):
-            return name
-        return super().find_class(module, name)
-
-    def persistent_load(self, pid):
-        if not isinstance(pid, tuple) or len(pid) != 5 or pid[0] != "storage":
-            raise RuntimeError(f"Unexpected persistent id in locmap pickle: {pid!r}")
-        _, storage_type_name, storage_key, _location, numel = pid
-        if not isinstance(storage_type_name, str):
-            storage_type_name = str(storage_type_name)
-        storage_type_name = storage_type_name.split(".")[-1]
-        return {
-            "key": storage_key,
-            "numel": int(numel),
-            "dtype": storage_dtype_from_pickle_name(storage_type_name),
-        }
-
-
-def load_locmap_from_torch_zip(locmap_path: Path) -> np.ndarray:
-    with zipfile.ZipFile(locmap_path) as archive:
-        metadata_pickle = archive.read("archive/data.pkl")
-        metadata = TorchArchiveMetadataUnpickler(io.BytesIO(metadata_pickle)).load()
-
-        storage = metadata["storage"]
-        raw = archive.read(f"archive/data/{storage['key']}")
-        flat = np.frombuffer(raw, dtype=storage["dtype"], count=storage["numel"])
-
-        size = metadata["size"]
-        storage_offset = metadata["storage_offset"]
-        tensor = flat[storage_offset:]
-        expected = int(np.prod(size))
-        tensor = tensor[:expected].reshape(size)
-
-    return np.asarray(tensor, dtype=np.float32)
-
-
-def load_locmap(locmap_path: Path) -> np.ndarray:
-    locmap = load_locmap_from_torch_zip(locmap_path)
-    if locmap.ndim == 4:
-        if locmap.shape[0] > 1:
-            locmap = locmap[1]
+    if isinstance(tensor, dict):
+        for key in ("locmap", "prediction", "pred", "output", "tensor", "volume", "logits"):
+            if key in tensor:
+                tensor = tensor[key]
+                break
         else:
-            locmap = locmap[0]
+            raise RuntimeError(
+                f"Unsupported .pt payload in {locmap_path}: expected a tensor or a known tensor key."
+            )
 
-    if locmap.ndim != 3:
-        raise RuntimeError(f"Unexpected localization map shape {locmap.shape} in {locmap_path}")
+    if hasattr(tensor, "detach"):
+        array = tensor.detach().cpu().numpy()
+    else:
+        array = np.asarray(tensor)
 
-    return np.asarray(locmap, dtype=np.float32)
+    while array.ndim > 4 and array.shape[0] == 1:
+        array = array[0]
+
+    if array.ndim == 4:
+        array = array[1] if array.shape[0] > 1 else array[0]
+
+    if array.ndim != 3:
+        raise RuntimeError(f"Unexpected .pt volume shape {array.shape} in {locmap_path}")
+
+    return np.asarray(array, dtype=np.float32)
 
 
-def notebook_slice_from_locmap(locmap: np.ndarray) -> int:
-    pred_sum = np.nan_to_num(locmap, nan=0.0).sum(axis=(1, 2))
-    if pred_sum.max() > 0:
-        return int(np.argmax(pred_sum))
-    return int(locmap.shape[0] // 2)
+def resolve_background_volume(
+    tomo_name: str,
+    row_run_dir: Path,
+    base_dir: Path,
+    finetuned_dir: Path,
+    background_source: str,
+) -> tuple[np.ndarray | None, str]:
+    if background_source == "pt":
+        locmap_path = find_locmap_path(row_run_dir, tomo_name)
+        if locmap_path is not None:
+            return load_pt_volume(locmap_path), str(locmap_path)
+
+    volume_path, volume_source = find_volume_path(tomo_name, base_dir, finetuned_dir)
+    if volume_path is not None:
+        return load_volume(volume_path, volume_source), str(volume_path)
+
+    return None, "blank_background"
+
+
+def infer_canvas_shape(*coord_sets: np.ndarray) -> tuple[int, int]:
+    max_x = 0.0
+    max_y = 0.0
+    for coords in coord_sets:
+        if len(coords) == 0:
+            continue
+        finite_coords = coords[np.isfinite(coords).all(axis=1)]
+        if len(finite_coords) == 0:
+            continue
+        max_x = max(max_x, float(np.max(finite_coords[:, 0])))
+        max_y = max(max_y, float(np.max(finite_coords[:, 1])))
+
+    width = max(128, int(np.ceil(max_x)) + 24)
+    height = max(128, int(np.ceil(max_y)) + 24)
+    return height, width
 
 
 def normalize_image(image: np.ndarray) -> np.ndarray:
@@ -402,22 +396,22 @@ def normalize_image(image: np.ndarray) -> np.ndarray:
     return np.clip((image - vmin) / (vmax - vmin + 1e-8), 0.0, 1.0)
 
 
-def finite_pixel_count(image: np.ndarray) -> int:
-    return int(np.isfinite(image).sum())
-
-
 def render_background(
-    volume: np.ndarray,
+    volume: np.ndarray | None,
     projection: str,
     z_index: int,
-    slice_half_width: int,
+    blank_shape: tuple[int, int],
 ) -> np.ndarray:
+    if volume is None:
+        return np.zeros(blank_shape, dtype=np.float32)
+
     if projection == "max":
         return normalize_image(np.nanmax(volume, axis=0))
     if projection == "mean":
         with np.errstate(invalid="ignore"):
             return normalize_image(np.nanmean(volume, axis=0))
 
+    z_index = int(np.clip(z_index, 0, volume.shape[0] - 1))
     candidate_z = [z_index]
     for offset in range(1, volume.shape[0]):
         left = z_index - offset
@@ -431,7 +425,7 @@ def render_background(
         with warnings.catch_warnings():
             warnings.simplefilter("ignore", category=RuntimeWarning)
             image = volume[current_z]
-        if finite_pixel_count(image) > 0:
+        if np.isfinite(image).any():
             return normalize_image(image)
 
     with warnings.catch_warnings():
@@ -440,25 +434,84 @@ def render_background(
             return normalize_image(np.nanmean(volume, axis=0))
 
 
+def rounded_valid_z(coords: np.ndarray) -> np.ndarray:
+    if len(coords) == 0:
+        return np.empty(0, dtype=int)
+    finite_mask = np.isfinite(coords[:, 2])
+    if not np.any(finite_mask):
+        return np.empty(0, dtype=int)
+    return np.rint(coords[finite_mask, 2]).astype(int)
+
+
+def select_shared_slice_from_predictions(
+    base_pred_coords: np.ndarray,
+    finetuned_pred_coords: np.ndarray,
+    fallback_coords: np.ndarray,
+    slice_half_width: int,
+    volume: np.ndarray | None,
+) -> int:
+    all_pred_z = np.concatenate(
+        [rounded_valid_z(base_pred_coords), rounded_valid_z(finetuned_pred_coords)]
+    )
+
+    if volume is not None and volume.shape[0] > 0:
+        depth = int(volume.shape[0])
+        valid_pred_z = all_pred_z[(all_pred_z >= 0) & (all_pred_z < depth)]
+    else:
+        valid_pred_z = all_pred_z[all_pred_z >= 0]
+        depth = int(valid_pred_z.max()) + 1 if valid_pred_z.size else 0
+
+    if valid_pred_z.size:
+        hist = np.bincount(valid_pred_z, minlength=max(depth, int(valid_pred_z.max()) + 1))
+        if slice_half_width > 0:
+            window = np.ones(2 * slice_half_width + 1, dtype=int)
+            scores = np.convolve(hist, window, mode="same")
+        else:
+            scores = hist
+
+        best_candidates = np.flatnonzero(scores == scores.max())
+        if best_candidates.size == 1:
+            return int(best_candidates[0])
+
+        exact_scores = hist[best_candidates]
+        exact_best = best_candidates[exact_scores == exact_scores.max()]
+        center = int(np.rint(valid_pred_z.mean()))
+        return int(min(exact_best, key=lambda z_idx: (abs(z_idx - center), z_idx)))
+
+    fallback_z = rounded_valid_z(fallback_coords)
+    if volume is not None and volume.shape[0] > 0:
+        if fallback_z.size:
+            return int(np.clip(int(np.rint(fallback_z.mean())), 0, volume.shape[0] - 1))
+        return int(volume.shape[0] // 2)
+    if fallback_z.size:
+        return int(max(0, int(np.rint(fallback_z.mean()))))
+    return 0
+
+
 def filter_coords_near_z(coords: np.ndarray, z_index: int, slice_half_width: int) -> np.ndarray:
     if len(coords) == 0:
         return coords
-    rounded_z = np.rint(coords[:, 2]).astype(int)
-    return coords[np.abs(rounded_z - z_index) <= slice_half_width]
+    rounded_z = rounded_valid_z(coords)
+    if rounded_z.size == 0:
+        return np.empty((0, 3), dtype=float)
+    finite_mask = np.isfinite(coords[:, 2])
+    finite_coords = coords[finite_mask]
+    return finite_coords[np.abs(rounded_z - z_index) <= slice_half_width]
 
 
 def panel_display_data(
     coords: np.ndarray,
-    volume: np.ndarray,
+    volume: np.ndarray | None,
     projection: str,
     z_index: int,
     slice_half_width: int,
+    blank_shape: tuple[int, int],
 ) -> tuple[np.ndarray, np.ndarray, int]:
     background = render_background(
         volume=volume,
         projection=projection,
         z_index=z_index,
-        slice_half_width=slice_half_width,
+        blank_shape=blank_shape,
     )
     if projection == "slice":
         visible_coords = filter_coords_near_z(
@@ -524,32 +577,60 @@ def main() -> None:
     if tomo_name not in finetuned_results:
         raise KeyError(f"{tomo_name} not found in fine-tuned results.")
 
-    volume_path, volume_source = find_volume_path(tomo_name, args.base_dir, args.finetuned_dir)
-    volume = load_volume(volume_path, volume_source)
+    base_result = base_results[tomo_name]
+    finetuned_result = finetuned_results[tomo_name]
+
+    base_volume, base_background_label = resolve_background_volume(
+        tomo_name=tomo_name,
+        row_run_dir=args.base_dir,
+        base_dir=args.base_dir,
+        finetuned_dir=args.finetuned_dir,
+        background_source=args.background_source,
+    )
+    finetuned_volume, finetuned_background_label = resolve_background_volume(
+        tomo_name=tomo_name,
+        row_run_dir=args.finetuned_dir,
+        base_dir=args.base_dir,
+        finetuned_dir=args.finetuned_dir,
+        background_source=args.background_source,
+    )
+
+    blank_shape = infer_canvas_shape(
+        base_result["pred_coords"],
+        finetuned_result["pred_coords"],
+        base_result["gt_coords"],
+    )
+    depth_hint_volume = base_volume if base_volume is not None else finetuned_volume
+
+    shared_z_index = select_shared_slice_from_predictions(
+        base_pred_coords=base_result["pred_coords"],
+        finetuned_pred_coords=finetuned_result["pred_coords"],
+        fallback_coords=base_result["gt_coords"],
+        slice_half_width=args.slice_half_width,
+        volume=depth_hint_volume,
+    )
 
     output_path = build_output_path(tomo_name, args.output)
     output_path.parent.mkdir(parents=True, exist_ok=True)
 
     fig, axes = plt.subplots(2, 3, figsize=(12.5, 8.5))
 
-    notebook_locmap = load_locmap(find_locmap_path(args.base_dir, tomo_name))
-    notebook_z_index = notebook_slice_from_locmap(notebook_locmap)
-
     row_specs = (
-        ("Base", base_results[tomo_name]),
-        ("Fine-tuned", finetuned_results[tomo_name]),
+        ("Base", base_result, base_volume),
+        ("Fine-tuned", finetuned_result, finetuned_volume),
     )
 
-    for row_idx, (row_label, row_result) in enumerate(row_specs):
+    for row_idx, (row_label, row_result, row_volume) in enumerate(row_specs):
         axes[row_idx, 0].set_ylabel(row_label, fontsize=12, fontweight="bold")
         for col_idx, (panel_label, color) in enumerate(PANEL_SPECS):
             panel_coords = row_result[panel_label]
             background, visible_coords, z_index = panel_display_data(
                 coords=panel_coords,
-                volume=volume,
+                volume=row_volume,
                 projection=args.projection,
-                z_index=notebook_z_index,
+                z_index=shared_z_index,
                 slice_half_width=args.slice_half_width,
+                blank_shape=blank_shape,
             )
             draw_panel(
                 ax=axes[row_idx, col_idx],
@@ -565,9 +646,9 @@ def main() -> None:
     fig.suptitle(
         (
             f"EXP2 TP/FP/FN comparison for {tomo_name}\n"
-            f"projection={args.projection}, match_radius={PROMPT_SIZE / 2:.1f}px, "
-            f"slice_half_width={args.slice_half_width}, "
-            f"background={volume_path.name}"
+            f"projection={args.projection}, shared_predicted_z={shared_z_index}, "
+            f"match_radius={PROMPT_SIZE / 2:.1f}px, slice_half_width={args.slice_half_width}, "
+            f"background_source={args.background_source}"
         ),
         fontsize=13,
         fontweight="bold",
@@ -577,8 +658,8 @@ def main() -> None:
     plt.close(fig)
 
     print(f"Selected tomo: {tomo_name}")
-    print(f"Notebook slice z: {notebook_z_index}")
-    for label, result in row_specs:
+    print(f"Shared predicted slice z: {shared_z_index}")
+    for label, result, _row_volume in row_specs:
         print(
             f"{label:11s} "
             f"TP={int(result['tp']):3d} "
@@ -586,7 +667,8 @@ def main() -> None:
             f"FN={int(result['fn']):3d} "
             f"F1={float(result['f1']):.3f}"
         )
-    print(f"Volume used: {volume_path}")
+    print(f"Base background: {base_background_label}")
+    print(f"Fine-tuned background: {finetuned_background_label}")
     print(f"Saved grid: {output_path}")
 
 
