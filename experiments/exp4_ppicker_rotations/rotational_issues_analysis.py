@@ -19,6 +19,11 @@ from sklearn.decomposition import PCA
 from sklearn.metrics import silhouette_score
 from sklearn.preprocessing import StandardScaler
 
+try:
+    from umap import UMAP
+except ImportError:
+    UMAP = None
+
 GLOBAL_Z_AXIS = np.array([0.0, 0.0, 1.0], dtype=float)
 THYROGLOBULIN_C2_AXIS_LOCAL = np.array([0.0, 0.0, 1.0], dtype=float)
 THYROGLOBULIN_C2_ROTATION = Rotation.from_rotvec(np.pi * THYROGLOBULIN_C2_AXIS_LOCAL)
@@ -1353,7 +1358,7 @@ def _run_pca_and_clustering(df_prompt_analysis):
 def _plot_overview(df_prompt_analysis, df_corr, analysis_dir):
     sns.set_theme(style="whitegrid")
 
-    fig, axes = plt.subplots(2, 2, figsize=(18, 12))
+    fig, axes = plt.subplots(2, 3, figsize=(24, 12))
 
     scatter = axes[0, 0].scatter(
         df_prompt_analysis["quality_score"],
@@ -1384,6 +1389,10 @@ def _plot_overview(df_prompt_analysis, df_corr, analysis_dir):
     axes[0, 1].set_title("Top F1 correlations (last 4 ranked variables)")
     axes[0, 1].set_xlabel("Pearson r with mean F1")
     axes[0, 1].set_ylabel("")
+    if axes[0, 1].legend_ is not None:
+        axes[0, 1].legend_.remove()
+
+    axes[0, 2].set_visible(False)
 
     structure_candidates = ["freq_ratio", "freq_ratio_mid_high"]
     centering_candidates = ["mass_center_shift", "centre_ratio"]
@@ -1460,9 +1469,42 @@ def _plot_overview(df_prompt_analysis, df_corr, analysis_dir):
         axes[1, 1].set_ylabel("Explained variance (%)")
         axes[1, 1].set_title("PCA scree plot")
         axes[1, 1].set_ylim(0, max(100, cumulative_explained.max() * 1.05))
+
+        if UMAP is not None and len(pca_df) >= 3:
+            n_neighbors = min(15, max(2, len(pca_df) - 1))
+            umap_model = UMAP(n_components=2, n_neighbors=n_neighbors, random_state=42)
+            umap_coords = umap_model.fit_transform(scaled_features)
+            umap_scatter = axes[1, 2].scatter(
+                umap_coords[:, 0],
+                umap_coords[:, 1],
+                c=pca_df["f1_mean"],
+                cmap="viridis",
+                s=80,
+                alpha=0.9,
+                edgecolors="black",
+                linewidths=0.3,
+            )
+            axes[1, 2].set_xlabel("UMAP 1")
+            axes[1, 2].set_ylabel("UMAP 2")
+            axes[1, 2].set_title("UMAP: SNR, contrast, structure, centering, quaternions")
+            plt.colorbar(umap_scatter, ax=axes[1, 2], label="Mean F1")
+        else:
+            axes[1, 2].set_title("UMAP")
+            axes[1, 2].text(
+                0.5,
+                0.5,
+                "UMAP unavailable in this kernel" if UMAP is None else "Not enough valid samples for UMAP",
+                ha="center",
+                va="center",
+                fontsize=11,
+                transform=axes[1, 2].transAxes,
+            )
+            axes[1, 2].set_xticks([])
+            axes[1, 2].set_yticks([])
     else:
         axes[1, 0].set_visible(False)
         axes[1, 1].set_visible(False)
+        axes[1, 2].set_visible(False)
 
     fig.tight_layout()
     fig.savefig(analysis_dir / "rotational_issues_overview.png", dpi=150, bbox_inches="tight")
