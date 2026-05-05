@@ -14,31 +14,30 @@ experiments/
 │   └── scripts/
 │       ├── empiar10988_fine_tuning.py
 │       └── empiar10988_inference.py
-├── exp2_umusynth_thy/
-│   ├── exp2_umusynth_thy_ppicker_finetuning.ipynb
-│   ├── exp2_umusynth_thy_ppicker_inference.ipynb
+├── exp2_polnet_thy/
+│   ├── exp2_polnet_thy_ppicker_finetuning.ipynb
+│   ├── exp2_polnet_thy_ppicker_inference.ipynb
 │   └── scripts/
-│       ├── umusynth_fine_tuning.py
-│       ├── umusynth_inference.py
+│       ├── polnet_fine_tuning.py
+│       ├── polnet_inference.py
 │       └── update_csv_paths.py
 ├── exp3_ppicker_limits/
 │   ├── exp3_ppicker_limits.ipynb
 │   ├── exp3_ppicker_limits_inference.ipynb
 │   └── scripts/
-│       ├── umusynth_fine_tuning.py
-│       ├── umusynth_inference.py
+│       ├── polnet_fine_tuning.py
+│       ├── polnet_inference.py
 │       └── update_csv_paths.py
 └── exp4_ppicker_rotations/
     ├── exp4_ppicker_rotations.ipynb
     ├── exp4_large_prompt_population_inference.ipynb
-    ├── exp4_inference_prompt_mix.ipynb
     ├── exp4_underperforming_prompts_analysis.ipynb
     ├── rotational_issues_analysis.py
     └── scripts/
         ├── extract_prompt_subvolumes_3d.py
-        ├── umusynth_inference.py
-        ├── umusynth_inference_followup.py
-        └── umusynth_inference_large.py
+        ├── polnet_inference.py
+        ├── polnet_inference_followup.py
+        └── polnet_inference_large.py
 ```
 
 ## Shared Configuration
@@ -56,9 +55,9 @@ The rule of thumb in this repository is simple: if a constant needs to remain st
 | Experiment | Goal | Dataset | Main deliverables |
 | --- | --- | --- | --- |
 | `exp1_empiar10988_ribo` | Validate the workflow on real cryo-ET ribosomes | EMPIAR-10988 | Fine-tuned checkpoint, prompt embeddings, proof-of-concept evaluation |
-| `exp2_umusynth_thy` | Build a stable single-class synthetic baseline | UMU synthetic thyroglobulin | Stable 20/5 split, fixed prompts, synthetic-domain evaluation |
-| `exp3_ppicker_limits` | Measure data efficiency and single vs multi prompt inference | UMU synthetic thyroglobulin | Increment study, prompt-selection logic, multi-prompt files, learning curves |
-| `exp4_ppicker_rotations` | Study prompt robustness, orientation, and failure modes | UMU synthetic thyroglobulin | Rotation-diverse prompt population, prompt-level metrics, robustness figures |
+| `exp2_polnet_thy` | Build a stable single-class synthetic baseline | PolNet-generated synthetic thyroglobulin | Stable 20/5 split, fixed prompts, synthetic-domain evaluation |
+| `exp3_ppicker_limits` | Measure data efficiency and single vs multi prompt inference | PolNet-generated synthetic thyroglobulin | Increment study, prompt-selection logic, multi-prompt files, learning curves |
+| `exp4_ppicker_rotations` | Study prompt robustness, orientation, and failure modes | PolNet-generated synthetic thyroglobulin | Rotation-diverse prompt population, prompt-level metrics, robustness figures |
 
 ## Experiment Details
 
@@ -86,7 +85,7 @@ Important characteristics:
 - centered crop with `crop_delta = 64`;
 - cluster-based post-processing is part of the experiment, not an afterthought.
 
-### Experiment 2: `exp2_umusynth_thy`
+### Experiment 2: `exp2_polnet_thy`
 
 Focus:
 
@@ -95,13 +94,13 @@ Focus:
 
 Main notebooks:
 
-- `exp2_umusynth_thy_ppicker_finetuning.ipynb`
-- `exp2_umusynth_thy_ppicker_inference.ipynb`
+- `exp2_polnet_thy_ppicker_finetuning.ipynb`
+- `exp2_polnet_thy_ppicker_inference.ipynb`
 
 Main scripts:
 
-- `scripts/umusynth_fine_tuning.py`
-- `scripts/umusynth_inference.py`
+- `scripts/polnet_fine_tuning.py`
+- `scripts/polnet_inference.py`
 - `scripts/update_csv_paths.py`
 
 Important characteristics:
@@ -125,8 +124,8 @@ Main notebooks:
 
 Main scripts:
 
-- `scripts/umusynth_fine_tuning.py`
-- `scripts/umusynth_inference.py`
+- `scripts/polnet_fine_tuning.py`
+- `scripts/polnet_inference.py`
 - `scripts/update_csv_paths.py`
 
 Important characteristics:
@@ -138,8 +137,7 @@ Important characteristics:
 
 Key output files:
 
-- `results/exp3_ppicker_limits/prompts/single_instance_prompt.json`
-- `results/exp3_ppicker_limits/prompts/multi_instance_prompt_n10.json`
+- prompt files generated under `results/exp3_ppicker_limits/prompts/`
 - increment-specific checkpoints and inference outputs.
 
 ### Experiment 4: `exp4_ppicker_rotations`
@@ -148,34 +146,37 @@ Focus:
 
 - move from average performance to prompt-level robustness;
 - test whether prompt failures are explained by rotation, acquisition anisotropy, or prompt quality;
-- expand prompt analysis from a small set to a large prompt population.
+- expand prompt analysis from a small prompt set to a large curated prompt population.
 
 Main notebooks:
 
 - `exp4_ppicker_rotations.ipynb`
 - `exp4_large_prompt_population_inference.ipynb`
-- `exp4_inference_prompt_mix.ipynb`
 - `exp4_underperforming_prompts_analysis.ipynb`
 
 Main scripts:
 
 - `rotational_issues_analysis.py`
 - `scripts/extract_prompt_subvolumes_3d.py`
-- `scripts/umusynth_inference.py`
-- `scripts/umusynth_inference_followup.py`
-- `scripts/umusynth_inference_large.py`
+- `scripts/polnet_inference.py`
+- `scripts/polnet_inference_followup.py`
+- `scripts/polnet_inference_large.py`
 
 Important characteristics:
 
 - prompt candidates are filtered by subtomogram quality;
 - quaternion distances are used to enforce diversity in orientation space;
 - the final large analysis is symmetry-aware for thyroglobulin through `SO(3)/C2`;
+- follow-up candidate prompts are evaluated in a dedicated results tree so the main EXP4 run is preserved;
 - prompt performance is evaluated on held-out validation tomograms with fixed matching rules.
 
 Key output files:
 
-- large prompt JSON bundles in `results/exp4_ppicker_rotations/`;
-- prompt-level tables and figures under `results/exp4/underperforming_analysis/`;
+- large prompt JSON bundles under `results/exp4_ppicker_rotations/prompts/`;
+- prompt-level inference outputs under `results/exp4_ppicker_rotations/inference/`;
+- rotational failure-analysis tables and figures under `results/exp4_ppicker_rotations/rotational_issues_analysis_<N>/`;
+- extracted prompt visualizations under `results/exp4_ppicker_rotations/prompt_subvolumes_3d/`;
+- follow-up candidate prompts and inference outputs under `results/exp4_ppicker_rotations/underperforming_prompts_followup/`;
 - exported figures later reused in the thesis appendix and results chapter.
 
 ## How to Run the Experiments
@@ -193,19 +194,19 @@ conda activate deepetpicker
 cd /path/to/cryoet-particle-picking/tools/ProPicker
 
 python ../../experiments/exp1_empiar10988_ribo/scripts/empiar10988_fine_tuning.py
-python ../../experiments/exp2_umusynth_thy/scripts/umusynth_fine_tuning.py
-python ../../experiments/exp3_ppicker_limits/scripts/umusynth_inference.py
-python ../../experiments/exp4_ppicker_rotations/scripts/umusynth_inference_large.py
+python ../../experiments/exp2_polnet_thy/scripts/polnet_fine_tuning.py
+python ../../experiments/exp3_ppicker_limits/scripts/polnet_inference.py
+python ../../experiments/exp4_ppicker_rotations/scripts/polnet_inference_large.py
 ```
 
 If a script fails because prompts or configs are missing, it usually means the notebook-generated setup stage was skipped.
 
 ## Reproducibility Rules
 
-- keep the UMU validation split unchanged between `EXP2`, `EXP3`, and `EXP4`;
+- keep the PolNet validation split unchanged between `EXP2`, `EXP3`, and `EXP4`;
 - generate prompt JSON files before running the long-run scripts;
 - keep source notebooks and scripts under `experiments/`, and write generated artifacts to `results/`;
-- preserve stable naming such as `fixed_prompts_*.json`, `single_instance_prompt.json`, and `multi_instance_prompt_n10.json`;
+- preserve stable naming for prompt JSON files under each experiment's `results/.../prompts/` directory;
 - export MRC localization maps when qualitative 3D inspection is part of the analysis.
 
 ## Adding New Experiments

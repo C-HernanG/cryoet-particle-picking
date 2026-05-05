@@ -13,15 +13,15 @@ Usage:
     conda activate deepetpicker
     
     # Run inference for all checkpoints with all prompts:
-    python ../../experiments/exp4_ppicker_rotations/scripts/umusynth_inference.py
+    python ../../experiments/exp4_ppicker_rotations/scripts/polnet_inference_large.py
     
     # Run inference for a specific checkpoint type:
-    python ../../experiments/exp4_ppicker_rotations/scripts/umusynth_inference.py --checkpoint-type base
-    python ../../experiments/exp4_ppicker_rotations/scripts/umusynth_inference.py --checkpoint-type single --increment 8
-    python ../../experiments/exp4_ppicker_rotations/scripts/umusynth_inference.py --checkpoint-type multi --increment 8
+    python ../../experiments/exp4_ppicker_rotations/scripts/polnet_inference_large.py --checkpoint-type base
+    python ../../experiments/exp4_ppicker_rotations/scripts/polnet_inference_large.py --checkpoint-type single --increment 8
+    python ../../experiments/exp4_ppicker_rotations/scripts/polnet_inference_large.py --checkpoint-type multi --increment 8
     
     # Run inference with a specific prompt:
-    python ../../experiments/exp4_ppicker_rotations/scripts/umusynth_inference.py --prompt-idx 0
+    python ../../experiments/exp4_ppicker_rotations/scripts/polnet_inference_large.py --prompt-idx 0
 """
 
 import sys
@@ -31,45 +31,40 @@ import copy
 import glob
 import argparse
 import importlib.util
-import json
 
-# Add paths BEFORE any project imports
+# Configure import paths before project imports.
 SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
 PROJECT_ROOT = os.path.dirname(os.path.dirname(os.path.dirname(SCRIPT_DIR)))
 PROPICKER_DIR = os.path.join(PROJECT_ROOT, "tools", "ProPicker")
 PROPICKER_INNER_DIR = os.path.join(PROPICKER_DIR, "propicker")
 
-# Add ProPicker tools to path (for utils.mrctools)
+# Expose ProPicker internals to local imports.
 sys.path.insert(0, PROPICKER_INNER_DIR)
 os.chdir(PROPICKER_INNER_DIR)
 
-# Add project root to path for paths.py
+# Expose the repository root for shared path definitions.
 sys.path.insert(0, PROJECT_ROOT)
 
-# Add experiments to path for config import
+# Expose shared experiment configuration modules.
 sys.path.insert(0, os.path.join(PROJECT_ROOT, "experiments"))
 
-# Now import project modules
+# Import project modules after the path setup.
 from utils.mrctools import load_mrc_data, save_mrc_data
 from paths import (
     PROPICKER_MODEL_FILE,
-    UMU_SYNTH_TOMOS_DIR,
+    POLNET_SYNTH_TOMOS_DIR,
     EXP3_RESULTS_DIR,
     EXP3_CHECKPOINTS_DIR,
     EXP4_RESULTS_DIR,
-    EXP4_PROMPTS_DIR,
-    EXP4_INFERENCE_DIR,
 )
 from experiments.config import (
     EXP4_VAL_TOMOS,
-    EXP4_NUM_PROMPTS,
     EXP4_BATCH_SIZE,
     EXP4_GPU_ID,
-    EXP4_CHECKPOINTS,
 )
 
 # =============================================================================
-# CONFIGURATION
+# Configuration
 # =============================================================================
 
 # Validation tomograms to test
@@ -79,9 +74,24 @@ test_tomos = EXP4_VAL_TOMOS
 gpu = EXP4_GPU_ID
 batch_size = EXP4_BATCH_SIZE
 
+# Large prompt population run defaults
+DEFAULT_RUN_NAME = "large_prompt_population_125"
+DEFAULT_RESULTS_BASE = os.environ.get(
+    "CRYOET_RESULTS_ROOT",
+    "/media/Disco_12TB/cryoet-particle-picking-results/exp4_ppicker_rotations",
+)
+RUN_RESULTS_DIR = os.path.join(DEFAULT_RESULTS_BASE, DEFAULT_RUN_NAME)
+RUN_PROMPTS_DIR = os.path.join(RUN_RESULTS_DIR, "prompts")
+RUN_INFERENCE_DIR = os.path.join(RUN_RESULTS_DIR, "inference")
+RUN_TMP_DIR = os.path.join(RUN_RESULTS_DIR, "tmp")
+
+# Fixed checkpoint for this large run
+FIXED_CHECKPOINT_TYPE = "multi"
+FIXED_INCREMENT = 16
+
 
 # =============================================================================
-# HELPER FUNCTIONS
+# Helper functions
 # =============================================================================
 
 
@@ -149,7 +159,7 @@ def run_inference(checkpoint_type, increment, prompt_idx, prompt_file, force=Fal
         result_name = f"{checkpoint_type}_inc{increment}_prompt{prompt_idx}"
         ckpt_file = get_checkpoint_path(checkpoint_type, increment)
         if ckpt_file is None:
-            print(f"❌ Checkpoint not found for {checkpoint_type} increment {increment}")
+            print(f" Checkpoint not found for {checkpoint_type} increment {increment}")
             return None
     
     print("\n" + "=" * 70)
@@ -157,12 +167,12 @@ def run_inference(checkpoint_type, increment, prompt_idx, prompt_file, force=Fal
     print("=" * 70)
     
     # Results directory
-    results_output_dir = os.path.join(str(EXP4_RESULTS_DIR), "inference", result_name)
+    results_output_dir = os.path.join(RUN_INFERENCE_DIR, result_name)
     
     # Check if already done
     coords_check_dir = os.path.join(results_output_dir, "PredictedLabels", "Coords_All")
     if not force and os.path.exists(coords_check_dir) and len(os.listdir(coords_check_dir)) > 0:
-        print(f"✅ Results already exist: {results_output_dir}")
+        print(f" Results already exist: {results_output_dir}")
         print("   Skipping (use --force to re-run)")
         return results_output_dir
     
@@ -175,7 +185,7 @@ def run_inference(checkpoint_type, increment, prompt_idx, prompt_file, force=Fal
     print(f"  Output: {results_output_dir}")
     
     # Setup temporary directory
-    tmp_dir = os.path.join(str(EXP4_RESULTS_DIR), "tmp", result_name)
+    tmp_dir = os.path.join(RUN_TMP_DIR, result_name)
     if os.path.exists(tmp_dir):
         shutil.rmtree(tmp_dir)
     os.makedirs(f"{tmp_dir}/raw_data")
@@ -184,7 +194,7 @@ def run_inference(checkpoint_type, increment, prompt_idx, prompt_file, force=Fal
     print(f"\nPreparing {len(test_tomos)} test tomograms...")
     for tomo_name in test_tomos:
         print(f"  Loading {tomo_name}...")
-        tomo_file = os.path.join(str(UMU_SYNTH_TOMOS_DIR), f"{tomo_name}.mrc")
+        tomo_file = os.path.join(str(POLNET_SYNTH_TOMOS_DIR), f"{tomo_name}.mrc")
         # Invert contrast (same as training)
         tomo = -1 * load_mrc_data(tomo_file).float()
         save_mrc_data(tomo, f"{tmp_dir}/raw_data/{tomo_name}.mrc")
@@ -262,7 +272,7 @@ def run_inference(checkpoint_type, increment, prompt_idx, prompt_file, force=Fal
         # Load config from training
         config_path = get_config_path(increment)
         if config_path is None:
-            print(f"❌ Training config not found for increment {increment}")
+            print(f" Training config not found for increment {increment}")
             return None
         
         module_name = "train_configs_module"
@@ -314,7 +324,7 @@ def run_inference(checkpoint_type, increment, prompt_idx, prompt_file, force=Fal
     os.system(cmd)
     
     # Copy results to organized directory
-    print(f"\n📁 Copying results to: {results_output_dir}")
+    print(f"\n Copying results to: {results_output_dir}")
     os.makedirs(results_output_dir, exist_ok=True)
     
     # Find where results were saved
@@ -330,6 +340,7 @@ def run_inference(checkpoint_type, increment, prompt_idx, prompt_file, force=Fal
         possible_srcs = [
             os.path.join(ckpt_parent_dir, src_dir_name),  # Relative to checkpoint
             os.path.join(tmp_dir, src_dir_name),
+            os.path.join(RUN_RESULTS_DIR, src_dir_name),
             os.path.join(str(EXP4_RESULTS_DIR), src_dir_name),
             os.path.join(str(EXP3_CHECKPOINTS_DIR), src_dir_name),
             os.path.join(PROJECT_ROOT, src_dir_name),  # Project root (fallback)
@@ -343,24 +354,24 @@ def run_inference(checkpoint_type, increment, prompt_idx, prompt_file, force=Fal
                     shutil.rmtree(dst_dir)
                 shutil.copytree(src_dir, dst_dir)
                 shutil.rmtree(src_dir)
-                print(f"   ✅ {src_dir_name} copied from {src_dir}")
+                print(f"    {src_dir_name} copied from {src_dir}")
                 found = True
                 break
         
         if not found:
-            print(f"   ⚠️ {src_dir_name} not found in expected locations")
+            print(f"    {src_dir_name} not found in expected locations")
     
     # Cleanup
     print("\nCleaning up...")
     if os.path.exists(tmp_dir):
         shutil.rmtree(tmp_dir)
     
-    print(f"✅ Inference complete: {result_name}")
+    print(f" Inference complete: {result_name}")
     return results_output_dir
 
 
 # =============================================================================
-# MAIN SCRIPT
+# Main entry point
 # =============================================================================
 
 if __name__ == "__main__":
@@ -368,61 +379,89 @@ if __name__ == "__main__":
         description="Run inference for ProPicker rotation invariance analysis")
     parser.add_argument(
         "--checkpoint-type", type=str, choices=["base", "single", "multi"],
-        default=None, help="Checkpoint type to evaluate (default: all)")
+        default=None, help="Deprecated: this script is fixed to multi checkpoint")
     parser.add_argument(
         "--increment", type=int, default=None,
-        help="Training increment to evaluate (required for single/multi)")
+        help="Deprecated: this script is fixed to increment 16")
     parser.add_argument(
         "--prompt-idx", type=int, default=None,
         help="Specific prompt index to use (default: all prompts)")
     parser.add_argument(
         "--force", action="store_true",
         help="Re-run inference even if results exist")
+    parser.add_argument(
+        "--run-name", type=str, default=DEFAULT_RUN_NAME,
+        help="Subdirectory under results/exp4_ppicker_rotations for this run")
+    parser.add_argument(
+        "--prompts-dir", type=str, default=None,
+        help="Directory containing prompt_*.json files (overrides --run-name)")
+    parser.add_argument(
+        "--results-root", type=str, default=None,
+        help="Root directory for this run outputs (overrides --run-name)")
+    parser.add_argument(
+        "--num-prompts", type=int, default=125,
+        help="Maximum number of prompt files to evaluate when --prompt-idx is not set")
     args = parser.parse_args()
     
     print("=" * 70)
     print("ProPicker Rotation Invariance Analysis - Inference")
     print("=" * 70)
+    print(f" Fixed checkpoint: {FIXED_CHECKPOINT_TYPE}_inc{FIXED_INCREMENT}")
     
+    # Resolve run directories
+    run_base = args.results_root if args.results_root else DEFAULT_RESULTS_BASE
+    run_root = run_base if args.results_root else os.path.join(run_base, args.run_name)
+    RUN_RESULTS_DIR = run_root
+    RUN_PROMPTS_DIR = args.prompts_dir if args.prompts_dir else os.path.join(RUN_RESULTS_DIR, "prompts")
+    RUN_INFERENCE_DIR = os.path.join(RUN_RESULTS_DIR, "inference")
+    RUN_TMP_DIR = os.path.join(RUN_RESULTS_DIR, "tmp")
+
+    os.makedirs(RUN_INFERENCE_DIR, exist_ok=True)
+    os.makedirs(RUN_TMP_DIR, exist_ok=True)
+
     # Find prompt files
-    prompt_dir = str(EXP4_PROMPTS_DIR)
+    prompt_dir = RUN_PROMPTS_DIR
     prompt_files = sorted(glob.glob(os.path.join(prompt_dir, "prompt_*.json")))
     
     if len(prompt_files) == 0:
-        print(f"\n❌ ERROR: No prompt files found in {prompt_dir}")
+        print(f"\n ERROR: No prompt files found in {prompt_dir}")
         print("   Run the notebook to generate rotation-diverse prompts first.")
         sys.exit(1)
     
-    print(f"\n📌 Found {len(prompt_files)} prompt files")
+    print(f"\n Found {len(prompt_files)} prompt files")
     
     # Determine which prompts to use
     if args.prompt_idx is not None:
         if args.prompt_idx >= len(prompt_files):
-            print(f"❌ Invalid prompt index {args.prompt_idx}. Max: {len(prompt_files)-1}")
+            print(f" Invalid prompt index {args.prompt_idx}. Max: {len(prompt_files)-1}")
             sys.exit(1)
         prompt_indices = [args.prompt_idx]
     else:
-        prompt_indices = list(range(min(len(prompt_files), EXP4_NUM_PROMPTS)))
+        if args.num_prompts <= 0:
+            print(" --num-prompts must be > 0")
+            sys.exit(1)
+        prompt_indices = list(range(min(len(prompt_files), args.num_prompts)))
     
-    print(f"📌 Prompts to evaluate: {prompt_indices}")
+    print(f" Prompts to evaluate: {prompt_indices}")
+    print(f" Run root: {RUN_RESULTS_DIR}")
+    print(f" Prompts dir: {RUN_PROMPTS_DIR}")
+    print(f" Inference dir: {RUN_INFERENCE_DIR}")
     
-    # Determine checkpoints to evaluate
-    checkpoint_configs = []
+    # Determine checkpoints to evaluate (fixed for this script)
+    if args.checkpoint_type not in (None, FIXED_CHECKPOINT_TYPE):
+        print(
+            f" Ignoring --checkpoint-type {args.checkpoint_type}. "
+            f"Using fixed {FIXED_CHECKPOINT_TYPE}."
+        )
+    if args.increment not in (None, FIXED_INCREMENT):
+        print(
+            f" Ignoring --increment {args.increment}. "
+            f"Using fixed {FIXED_INCREMENT}."
+        )
+
+    checkpoint_configs = [(FIXED_CHECKPOINT_TYPE, FIXED_INCREMENT)]
     
-    if args.checkpoint_type is None or args.checkpoint_type == "base":
-        checkpoint_configs.append(("base", None))
-    
-    if args.checkpoint_type is None or args.checkpoint_type == "single":
-        increments = [args.increment] if args.increment else EXP4_CHECKPOINTS["increment_single"]
-        for inc in increments:
-            checkpoint_configs.append(("single", inc))
-    
-    if args.checkpoint_type is None or args.checkpoint_type == "multi":
-        increments = [args.increment] if args.increment else EXP4_CHECKPOINTS["increment_multi"]
-        for inc in increments:
-            checkpoint_configs.append(("multi", inc))
-    
-    print(f"📌 Checkpoint configurations: {len(checkpoint_configs)}")
+    print(f" Checkpoint configurations: {len(checkpoint_configs)}")
     
     # Run inference
     results = {}
@@ -447,8 +486,8 @@ if __name__ == "__main__":
     print("=" * 70)
     
     success = sum(1 for r in results.values() if r is not None)
-    print(f"\n✅ Successful: {success}/{len(results)}")
-    print(f"📁 Results saved to: {EXP4_RESULTS_DIR}/inference/")
+    print(f"\n Successful: {success}/{len(results)}")
+    print(f" Results saved to: {RUN_INFERENCE_DIR}")
     
     print("\nNext step: Analyze results in the notebook")
     print("=" * 70)

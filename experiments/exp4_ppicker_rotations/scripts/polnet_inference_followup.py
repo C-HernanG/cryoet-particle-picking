@@ -11,10 +11,10 @@ Usage:
     conda activate deepetpicker
 
     # Run all follow-up inferences:
-    python ../../experiments/exp4_ppicker_rotations/scripts/umusynth_inference_followup.py
+    python ../../experiments/exp4_ppicker_rotations/scripts/polnet_inference_followup.py
 
     # Run a specific prompt:
-    python ../../experiments/exp4_ppicker_rotations/scripts/umusynth_inference_followup.py --prompt-idx 0
+    python ../../experiments/exp4_ppicker_rotations/scripts/polnet_inference_followup.py --prompt-idx 0
 """
 
 import argparse
@@ -27,26 +27,26 @@ import subprocess
 import sys
 import time
 
-# Add paths BEFORE any project imports
+# Configure import paths before project imports.
 SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
 PROJECT_ROOT = os.path.dirname(os.path.dirname(os.path.dirname(SCRIPT_DIR)))
 PROPICKER_DIR = os.path.join(PROJECT_ROOT, "tools", "ProPicker")
 PROPICKER_INNER_DIR = os.path.join(PROPICKER_DIR, "propicker")
 
-# Add ProPicker tools to path (for utils.mrctools)
+# Expose ProPicker internals to local imports.
 sys.path.insert(0, PROPICKER_INNER_DIR)
 os.chdir(PROPICKER_INNER_DIR)
 
-# Add project root to path for paths.py
+# Expose the repository root for shared path definitions.
 sys.path.insert(0, PROJECT_ROOT)
 
-# Add experiments to path for config import
+# Expose shared experiment configuration modules.
 sys.path.insert(0, os.path.join(PROJECT_ROOT, "experiments"))
 
 from utils.mrctools import load_mrc_data, save_mrc_data
 from paths import (
     PROPICKER_MODEL_FILE,
-    UMU_SYNTH_TOMOS_DIR,
+    POLNET_SYNTH_TOMOS_DIR,
     EXP3_RESULTS_DIR,
     EXP3_CHECKPOINTS_DIR,
     EXP4_FOLLOWUP_RESULTS_DIR,
@@ -60,7 +60,7 @@ from experiments.config import (
 )
 
 # =============================================================================
-# CONFIGURATION
+# Configuration
 # =============================================================================
 
 test_tomos = EXP4_VAL_TOMOS
@@ -71,7 +71,7 @@ followup_increment = 16
 
 
 # =============================================================================
-# HELPER FUNCTIONS
+# Helper functions
 # =============================================================================
 
 
@@ -149,6 +149,7 @@ def find_generated_output(src_dir_name, search_roots, min_mtime):
 
 
 def cleanup_tmp_dir(tmp_dir):
+    """Remove a temporary inference directory when it exists."""
     if os.path.exists(tmp_dir):
         shutil.rmtree(tmp_dir)
 
@@ -194,7 +195,7 @@ def run_inference(prompt_idx, prompt_file, force=False):
     print(f"\nPreparing {len(test_tomos)} test tomograms...")
     for tomo_name in test_tomos:
         print(f"  Loading {tomo_name}...")
-        tomo_file = os.path.join(str(UMU_SYNTH_TOMOS_DIR), f"{tomo_name}.mrc")
+        tomo_file = os.path.join(str(POLNET_SYNTH_TOMOS_DIR), f"{tomo_name}.mrc")
         tomo = -1 * load_mrc_data(tomo_file).float()
         save_mrc_data(tomo, f"{tmp_dir}/raw_data/{tomo_name}.mrc")
         del tomo
@@ -329,7 +330,7 @@ def run_inference(prompt_idx, prompt_file, force=False):
 
 
 # =============================================================================
-# MAIN SCRIPT
+# Main entry point
 # =============================================================================
 
 

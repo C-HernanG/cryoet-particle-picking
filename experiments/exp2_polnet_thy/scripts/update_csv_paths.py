@@ -149,13 +149,14 @@ def process_csv(
     print(f"  Updated cells: {updated_cells:,}")
 
     if dry_run:
-        print(f"\n⚠️  DRY RUN MODE: No changes were made to the file")
+        print(f"\n  DRY RUN MODE: No changes were made to the file")
         print(f"   To apply changes, run the command without --dry-run")
     else:
-        print(f"\n✅ Updated file saved to: {output_csv}")
+        print(f"\n Updated file saved to: {output_csv}")
 
 
 def main():
+    """Parse command-line arguments and update the requested CSV paths."""
     parser = argparse.ArgumentParser(
         description='Update file paths in specific CSV columns',
         formatter_class=argparse.RawDescriptionHelpFormatter,

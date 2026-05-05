@@ -3,7 +3,7 @@ Configuration and common utilities for experiments.
 
 This module contains:
 1. Experiment 1 (EMPIAR-10988 Ribosome) parameters
-2. Experiment 2 (UMU Synth Thyroglobulin) parameters
+2. Experiment 2 (PolNet-generated synthetic Thyroglobulin) parameters
 3. Utilities to configure tool paths like ProPicker
 
 Usage:
@@ -68,7 +68,7 @@ EXP1_GPU_ID = 0
 EXP1_USE_BINARY_LABELS = True
 
 # =============================================================================
-# EXP2: UMU Synthetic Thyroglobulin Parameters
+# EXP2: PolNet-generated synthetic Thyroglobulin Parameters
 # =============================================================================
 
 THYROGLOBULIN_LABEL = 7           # Label in CSV

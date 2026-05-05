@@ -13,8 +13,8 @@ Usage:
     python experiments/exp4_ppicker_rotations/scripts/extract_prompt_subvolumes_3d.py
 
     python experiments/exp4_ppicker_rotations/scripts/extract_prompt_subvolumes_3d.py \
-        --prompts-json results/exp4/prompts/all_rotation_prompts.json \
-        --output-dir results/exp4/prompt_subvolumes_3d
+        --prompts-json <results_dir>/prompts/all_rotation_prompts.json \
+        --output-dir <results_dir>/prompt_subvolumes_3d
 """
 
 from __future__ import annotations
@@ -44,11 +44,12 @@ if str(PROJECT_ROOT) not in sys.path:
 if str(PROJECT_ROOT / "experiments") not in sys.path:
     sys.path.insert(0, str(PROJECT_ROOT / "experiments"))
 
-from paths import EXP4_RESULTS_DIR, UMU_SYNTH_LABELS_DIR, UMU_SYNTH_TOMOS_DIR
+from paths import EXP4_RESULTS_DIR, POLNET_SYNTH_LABELS_DIR, POLNET_SYNTH_TOMOS_DIR
 from experiments.config import EXP4_NUM_PROMPTS, PROMPT_SIZE
 
 
 def unique_paths(paths: Iterable[Path]) -> list[Path]:
+    """Return unique paths while preserving their input order."""
     seen: set[str] = set()
     ordered: list[Path] = []
     for path in paths:
@@ -61,6 +62,7 @@ def unique_paths(paths: Iterable[Path]) -> list[Path]:
 
 
 def candidate_exp4_roots() -> list[Path]:
+    """Return candidate EXP4 result roots that may contain prompt artifacts."""
     return unique_paths(
         [
             Path(EXP4_RESULTS_DIR),
@@ -71,6 +73,7 @@ def candidate_exp4_roots() -> list[Path]:
 
 
 def resolve_default_prompts_source() -> Path | None:
+    """Resolve the default prompt metadata source from known EXP4 locations."""
     for root in candidate_exp4_roots():
         combined = root / "prompts" / "all_rotation_prompts.json"
         if combined.exists():
@@ -82,6 +85,7 @@ def resolve_default_prompts_source() -> Path | None:
 
 
 def resolve_default_output_dir() -> Path:
+    """Choose a default output directory under the first existing EXP4 results root."""
     for root in candidate_exp4_roots():
         if root.exists():
             return root / "prompt_subvolumes_3d"
@@ -89,11 +93,13 @@ def resolve_default_output_dir() -> Path:
 
 
 def load_mrc(path: Path) -> np.ndarray:
+    """Load an MRC volume as a float32 NumPy array."""
     with mrcfile.open(path, permissive=True) as mrc:
         return np.asarray(mrc.data, dtype=np.float32)
 
 
 def read_voxel_size_angstrom(path: Path) -> float:
+    """Read the voxel size in Angstroms from an MRC header."""
     with mrcfile.open(path, permissive=True) as mrc:
         voxel_size = float(mrc.voxel_size.x)
     if not np.isfinite(voxel_size) or voxel_size <= 0:
@@ -102,12 +108,14 @@ def read_voxel_size_angstrom(path: Path) -> float:
 
 
 def save_mrc(data: np.ndarray, path: Path) -> None:
+    """Write a NumPy array to an MRC file, creating parent directories if needed."""
     path.parent.mkdir(parents=True, exist_ok=True)
     with mrcfile.new(path, overwrite=True) as mrc:
         mrc.set_data(np.asarray(data, dtype=np.float32))
 
 
 def parse_prompt_payload(payload: dict, default_index: int) -> dict:
+    """Normalize one prompt JSON payload into the common manifest schema."""
     if "index" in payload and "metadata" in payload:
         metadata = payload.get("metadata", {})
         coords = metadata.get("coords")
@@ -147,6 +155,7 @@ def parse_prompt_payload(payload: dict, default_index: int) -> dict:
 
 
 def attach_coordinate_fields(entry: dict, metadata: dict, generic_coords: list[float]) -> None:
+    """Attach voxel and Angstrom coordinate variants to a normalized prompt entry."""
     entry["x"] = float(generic_coords[0])
     entry["y"] = float(generic_coords[1])
     entry["z"] = float(generic_coords[2])
@@ -169,6 +178,7 @@ def attach_coordinate_fields(entry: dict, metadata: dict, generic_coords: list[f
 
 
 def resolve_prompt_coordinates(entry: dict, voxel_size_angstrom: float, coords_unit: str) -> tuple[np.ndarray, np.ndarray, str]:
+    """Return prompt coordinates in both Angstrom and voxel units."""
     if coords_unit == "angstrom":
         if all(key in entry for key in ["x_angstrom", "y_angstrom", "z_angstrom"]):
             coords_angstrom = np.array(
@@ -195,6 +205,7 @@ def resolve_prompt_coordinates(entry: dict, voxel_size_angstrom: float, coords_u
 
 
 def load_prompt_entries(source: Path) -> list[dict]:
+    """Load prompt entries from a combined JSON file or a prompt directory."""
     if source.is_dir():
         combined = source / "all_rotation_prompts.json"
         if combined.exists():
@@ -231,6 +242,7 @@ def load_prompt_entries(source: Path) -> list[dict]:
 
 
 def extract_subvolume(volume: np.ndarray, x: float, y: float, z: float, size: int) -> np.ndarray:
+    """Extract a cubic subvolume around the requested coordinate with zero padding."""
     if size % 2 == 0:
         raise ValueError("Prompt size must be odd.")
 
@@ -259,6 +271,7 @@ def extract_subvolume(volume: np.ndarray, x: float, y: float, z: float, size: in
 
 
 def get_tomo_id_from_name(tomo_name: str) -> int:
+    """Extract the numeric tomogram identifier from a PolNet tomogram name."""
     parts = tomo_name.split("_")
     if len(parts) < 3:
         raise ValueError(f"Cannot parse tomogram id from name: {tomo_name}")
@@ -266,10 +279,12 @@ def get_tomo_id_from_name(tomo_name: str) -> int:
 
 
 def get_label_filename(tomo_name: str) -> str:
+    """Return the label-volume filename associated with a tomogram name."""
     return f"tomo_lbls_{get_tomo_id_from_name(tomo_name)}.mrc"
 
 
 def build_label_mask(label_subvolume: np.ndarray) -> tuple[np.ndarray, dict]:
+    """Build a boolean render mask and basic diagnostics from a label subvolume."""
     mask = np.asarray(label_subvolume) > 0
     diagnostics = {
         "visible_voxels": int(mask.sum()),
@@ -278,6 +293,7 @@ def build_label_mask(label_subvolume: np.ndarray) -> tuple[np.ndarray, dict]:
 
 
 def prompt_to_euler(prompt: dict) -> np.ndarray:
+    """Convert prompt quaternions to XYZ Euler angles in degrees."""
     with np.errstate(invalid="ignore"):
         return Rotation.from_quat(
             [prompt["q1"], prompt["q2"], prompt["q3"], prompt["q4"]]
@@ -285,6 +301,7 @@ def prompt_to_euler(prompt: dict) -> np.ndarray:
 
 
 def facecolors_from_volume(volume_xyz: np.ndarray, mask_xyz: np.ndarray) -> np.ndarray:
+    """Map voxel intensities to RGBA colors for masked 3D rendering."""
     colors = np.zeros(volume_xyz.shape + (4,), dtype=np.float32)
     if not np.any(mask_xyz):
         return colors
@@ -302,6 +319,7 @@ def facecolors_from_volume(volume_xyz: np.ndarray, mask_xyz: np.ndarray) -> np.n
 
 
 def add_xyz_arrows(ax, mask_xyz: np.ndarray) -> None:
+    """Draw XYZ axis arrows in an empty corner of the 3D prompt view."""
     shape_xyz = tuple(int(v) for v in mask_xyz.shape)
     size = float(min(shape_xyz))
     length = max(size * 0.12, 2.2)
@@ -379,6 +397,7 @@ def render_grid(
     elevation_elev: float,
     elevation_azim: float,
 ) -> None:
+    """Render the multi-view 3D prompt grid and save it as a figure."""
     view_specs = [
         ("Profile", profile_elev, profile_azim),
         ("Plan", plan_elev, plan_azim),
@@ -416,6 +435,7 @@ def render_grid(
 
 
 def build_argument_parser() -> argparse.ArgumentParser:
+    """Build the command-line parser for prompt subvolume extraction."""
     parser = argparse.ArgumentParser(
         description="Extract and visualize the selected EXP4 prompt subvolumes."
     )
@@ -428,14 +448,14 @@ def build_argument_parser() -> argparse.ArgumentParser:
     parser.add_argument(
         "--tomos-dir",
         type=Path,
-        default=Path(UMU_SYNTH_TOMOS_DIR),
-        help="Directory containing the source UMU synthetic tomograms.",
+        default=Path(POLNET_SYNTH_TOMOS_DIR),
+        help="Directory containing the source PolNet-generated synthetic tomograms.",
     )
     parser.add_argument(
         "--labels-dir",
         type=Path,
-        default=Path(UMU_SYNTH_LABELS_DIR),
-        help="Directory containing the binary UMU synthetic label tomograms.",
+        default=Path(POLNET_SYNTH_LABELS_DIR),
+        help="Directory containing the binary PolNet-generated synthetic label tomograms.",
     )
     parser.add_argument(
         "--output-dir",
@@ -455,7 +475,7 @@ def build_argument_parser() -> argparse.ArgumentParser:
         default="voxel",
         help=(
             "Interpret generic prompt coords as Angstroms or voxels. "
-            "Default is 'angstrom' because source UMU coordinates come from the CSV in Angstroms."
+            "Default is 'angstrom' because source PolNet coordinates come from the CSV in Angstroms."
         ),
     )
     parser.add_argument(
@@ -504,6 +524,7 @@ def build_argument_parser() -> argparse.ArgumentParser:
 
 
 def main() -> None:
+    """Run prompt extraction, manifest generation, and 3D rendering."""
     parser = build_argument_parser()
     args = parser.parse_args()
 

@@ -1,3 +1,10 @@
+"""Utilities for prompt-level robustness analysis in EXP4.
+
+This module derives rotation-aware features, merges prompt metadata with
+inference outcomes, runs exploratory statistics, and generates the plots
+used to explain prompt failures in the large-population rotation study.
+"""
+
 from __future__ import annotations
 
 import re
@@ -48,22 +55,26 @@ C2_ALIAS_RAW_DEG = 150.0
 
 
 def _to_numpy(x):
+    """Return tensors or arrays as NumPy float32 arrays."""
     if hasattr(x, "detach"):
         return x.detach().cpu().float().numpy()
     return np.asarray(x, dtype=np.float32)
 
 
 def parse_snr_from_tomo_name(tomo_name: str) -> float:
+    """Extract the SNR value encoded in a tomogram name."""
     match = re.search(r"snr([0-9]+(?:\.[0-9]+)?)", str(tomo_name))
     return float(match.group(1)) if match else np.nan
 
 
 def parse_tomo_id(tomo_name: str) -> float:
+    """Extract the numeric tomogram identifier from a tomogram name."""
     match = re.search(r"tomo_rec_(\d+)", str(tomo_name))
     return float(match.group(1)) if match else np.nan
 
 
 def safe_pearsonr(x, y):
+    """Compute a Pearson correlation after dropping non-finite values."""
     x = pd.to_numeric(pd.Series(x), errors="coerce").to_numpy(dtype=float)
     y = pd.to_numeric(pd.Series(y), errors="coerce").to_numpy(dtype=float)
     mask = np.isfinite(x) & np.isfinite(y)
@@ -77,6 +88,7 @@ def safe_pearsonr(x, y):
 
 
 def safe_spearmanr(x, y):
+    """Compute a Spearman correlation after dropping non-finite values."""
     x = pd.to_numeric(pd.Series(x), errors="coerce").to_numpy(dtype=float)
     y = pd.to_numeric(pd.Series(y), errors="coerce").to_numpy(dtype=float)
     mask = np.isfinite(x) & np.isfinite(y)
@@ -86,6 +98,7 @@ def safe_spearmanr(x, y):
 
 
 def safe_mannwhitneyu(a, b):
+    """Compute a two-sided Mann-Whitney U p-value for two samples."""
     a = pd.to_numeric(pd.Series(a), errors="coerce").dropna().to_numpy(dtype=float)
     b = pd.to_numeric(pd.Series(b), errors="coerce").dropna().to_numpy(dtype=float)
     if len(a) < 2 or len(b) < 2:
@@ -94,6 +107,7 @@ def safe_mannwhitneyu(a, b):
 
 
 def pooled_effect_size(a, b):
+    """Compute the pooled standardized mean difference between two samples."""
     a = pd.to_numeric(pd.Series(a), errors="coerce").dropna().to_numpy(dtype=float)
     b = pd.to_numeric(pd.Series(b), errors="coerce").dropna().to_numpy(dtype=float)
     if len(a) < 2 or len(b) < 2:
@@ -107,6 +121,7 @@ def pooled_effect_size(a, b):
 
 
 def _normalize_quaternion(q):
+    """Return a normalized quaternion after validating its norm."""
     q = np.asarray(q, dtype=float)
     norm = np.linalg.norm(q)
     if norm == 0 or not np.isfinite(norm):
@@ -115,6 +130,7 @@ def _normalize_quaternion(q):
 
 
 def _canonicalize_quaternion_array(quat_array):
+    """Normalize quaternion rows and enforce a consistent sign convention."""
     quat_array = np.asarray(quat_array, dtype=float)
     if quat_array.ndim != 2 or quat_array.shape[1] != 4:
         raise ValueError("Expected quaternion array with shape (N, 4).")
@@ -129,16 +145,19 @@ def _canonicalize_quaternion_array(quat_array):
 
 
 def rotation_geodesic_distance_deg(rot_a, rot_b):
+    """Compute the geodesic distance between two rotations in degrees."""
     return float(np.degrees((rot_a.inv() * rot_b).magnitude()))
 
 
 def quaternion_angular_distance_deg(q1, q2):
+    """Compute the angular distance between two quaternions in degrees."""
     rot_a = Rotation.from_quat(_normalize_quaternion(q1))
     rot_b = Rotation.from_quat(_normalize_quaternion(q2))
     return rotation_geodesic_distance_deg(rot_a, rot_b)
 
 
 def quaternion_angular_distance_c2_deg(q1, q2, symmetry_rotation=THYROGLOBULIN_C2_ROTATION):
+    """Compute the C2-aware angular distance between two quaternions."""
     rot_a = Rotation.from_quat(_normalize_quaternion(q1))
     rot_b = Rotation.from_quat(_normalize_quaternion(q2))
     return min(
@@ -148,6 +167,7 @@ def quaternion_angular_distance_c2_deg(q1, q2, symmetry_rotation=THYROGLOBULIN_C
 
 
 def quaternion_to_rotation_features(q1, q2, q3, q4):
+    """Derive orientation features from a prompt quaternion."""
     q = _normalize_quaternion([q1, q2, q3, q4])
 
     rot = Rotation.from_quat(q)
@@ -188,6 +208,7 @@ def quaternion_to_rotation_features(q1, q2, q3, q4):
 
 
 def compute_exact_distance_to_center(x, y, z, tomo_shape):
+    """Measure the exact and normalized distance from a point to tomogram center."""
     center_xyz = np.array(
         [
             (tomo_shape[2] - 1) / 2.0,
@@ -203,6 +224,7 @@ def compute_exact_distance_to_center(x, y, z, tomo_shape):
 
 
 def _robust_norm(vol, eps=1e-6):
+    """Apply a median-and-MAD normalization to a subtomogram volume."""
     v = vol.astype(np.float32, copy=False)
     med = np.median(v)
     mad = np.median(np.abs(v - med)) * 1.4826
@@ -210,6 +232,7 @@ def _robust_norm(vol, eps=1e-6):
 
 
 def _center_border_ratio(vol, border=4, centre_frac=0.45, eps=1e-6):
+    """Measure how concentrated the signal is at the subtomogram center."""
     m = vol.shape[0]
     a = np.abs(vol)
     b = border
@@ -234,6 +257,7 @@ def _center_border_ratio(vol, border=4, centre_frac=0.45, eps=1e-6):
 
 
 def _freq_structure_ratio(vol, k_low=0.08, k_high=0.30, eps=1e-8):
+    """Compare mid-band structural power against high-frequency noise power."""
     m = vol.shape[0]
     F = np.fft.fftn(vol)
     P = (np.abs(F) ** 2).astype(np.float64)
@@ -249,6 +273,7 @@ def _freq_structure_ratio(vol, k_low=0.08, k_high=0.30, eps=1e-8):
 
 
 def _dc_penalty(vol, eps=1e-6):
+    """Measure the penalty associated with global offset or gradient artifacts."""
     return np.abs(vol.mean()) / (vol.std() + eps)
 
 
@@ -262,6 +287,7 @@ def compute_quality_score(
     w_centre=0.9,
     w_dc=0.6,
 ):
+    """Compute the scalar prompt-quality score used for selection and analysis."""
     vol = _to_numpy(subtomo)
     vol = vol if vol.ndim == 3 else np.squeeze(vol)
     vol = _robust_norm(vol)
@@ -280,6 +306,7 @@ def compute_quality_score(
 
 
 def compute_subtomo_features(subtomo):
+    """Extract the full handcrafted feature set for one subtomogram."""
     vol = _to_numpy(subtomo)
     vol = vol if vol.ndim == 3 else np.squeeze(vol)
     vol = vol.astype(np.float32)
@@ -378,6 +405,7 @@ def compute_subtomo_features(subtomo):
 
 
 def radial_power_spectrum(vol):
+    """Compute a radial power spectrum summary for a subtomogram."""
     vol = _to_numpy(vol)
     F = fftn(vol)
     P = np.abs(fftshift(F)) ** 2
@@ -397,6 +425,7 @@ def radial_power_spectrum(vol):
 
 
 def _select_focus_results(df_results, study_num_prompts, checkpoint_type, increment):
+    """Select the result subset that should drive the focused EXP4 analysis."""
     df_focus = df_results[
         (df_results["checkpoint_type"] == checkpoint_type)
         & (df_results["increment"] == increment)
@@ -425,6 +454,7 @@ def _select_focus_results(df_results, study_num_prompts, checkpoint_type, increm
 
 
 def _prepare_prompt_dataframe(df_selected, prompt_info, study_num_prompts):
+    """Normalize prompt metadata into a dataframe ready for analysis."""
     n_prompts = min(study_num_prompts, len(prompt_info))
     rows = []
     for idx in range(n_prompts):
@@ -467,6 +497,7 @@ def _prepare_prompt_dataframe(df_selected, prompt_info, study_num_prompts):
 
 
 def _load_tomo_shapes(tomo_dir, tomo_names):
+    """Load tomogram shapes needed for geometric context features."""
     shape_cache = {}
     tomo_dir = Path(tomo_dir)
     for tomo_name in sorted(set(tomo_names)):
@@ -479,6 +510,7 @@ def _load_tomo_shapes(tomo_dir, tomo_names):
 
 
 def _build_prompt_performance(df_focus):
+    """Aggregate inference metrics into one row per prompt."""
     df_focus = df_focus.copy()
     df_focus["val_tomo_snr"] = df_focus["tomo_name"].map(parse_snr_from_tomo_name)
 
@@ -536,6 +568,7 @@ def _build_prompt_performance(df_focus):
 
 
 def _build_prompt_orientation_context(df_prompts, proximity_degrees=(30.0, 45.0)):
+    """Attach orientation and geometric context features to each prompt."""
     if len(df_prompts) == 0:
         return pd.DataFrame(columns=["prompt_idx"])
 
@@ -575,6 +608,7 @@ def _build_prompt_orientation_context(df_prompts, proximity_degrees=(30.0, 45.0)
 
 
 def _build_subtomo_feature_table(df_prompts, subtomos, embeddings, tomo_shapes, study_num_prompts):
+    """Compute subtomogram-derived feature tables for the analyzed prompts."""
     n_prompts = min(study_num_prompts, len(subtomos), len(embeddings))
     embedding_array = _to_numpy(embeddings)[:n_prompts]
     emb_centroid = embedding_array.mean(axis=0)
@@ -652,6 +686,7 @@ def _build_subtomo_feature_table(df_prompts, subtomos, embeddings, tomo_shapes, 
 
 
 def _build_correlation_table(df_prompt_analysis):
+    """Build a correlation summary table between features and outcomes."""
     feature_groups = {
         "symmetry": [
             "c2_axis_to_global_z_deg",
@@ -755,6 +790,7 @@ def _build_correlation_table(df_prompt_analysis):
 
 
 def _build_effect_table(df_prompt_analysis, feature_list):
+    """Build a two-group effect-size table for selected prompt subsets."""
     q25 = df_prompt_analysis["f1_mean"].quantile(0.25)
     q75 = df_prompt_analysis["f1_mean"].quantile(0.75)
 
@@ -794,6 +830,7 @@ def _build_effect_table(df_prompt_analysis, feature_list):
 
 
 def _build_standardized_feature_frame(df, feature_names):
+    """Standardize numeric feature columns for multivariate analysis."""
     frames = []
     active = []
     for feat in feature_names:
@@ -814,6 +851,7 @@ def _build_standardized_feature_frame(df, feature_names):
 
 
 def _fit_ols_matrix(X, y, column_names):
+    """Fit a linear model from a prepared design matrix."""
     X = np.asarray(X, dtype=float)
     y = np.asarray(y, dtype=float).reshape(-1)
 
@@ -863,6 +901,7 @@ def _fit_ols_matrix(X, y, column_names):
 
 
 def _compare_nested_models(base_fit, full_fit):
+    """Compare nested linear models to estimate incremental explanatory power."""
     delta_sse = max(base_fit["sse"] - full_fit["sse"], 0.0)
     df_num = max(full_fit["rank"] - base_fit["rank"], 0)
     df_den = max(full_fit["df_resid"], 1)
@@ -900,6 +939,7 @@ def _run_stratified_block_permutation(
     base_column_names,
     block_column_names,
 ):
+    """Run a stratified block permutation test for adjusted comparisons."""
     base_fit = _fit_ols_matrix(base_X, y, base_column_names)
     full_fit = _fit_ols_matrix(
         np.column_stack([base_X, block_X]),
@@ -961,6 +1001,7 @@ def _run_stratified_block_permutation(
 
 
 def _run_adjusted_rotation_checks(df_prompt_analysis):
+    """Evaluate whether rotation features remain predictive after adjustment."""
     required_cols = (
         ["prompt_idx", "tomo_name", "f1_mean", "recall_mean"]
         + CAUSAL_ROTATION_ACQUISITION_FEATURES
@@ -1062,6 +1103,7 @@ def _run_adjusted_rotation_checks(df_prompt_analysis):
 
 
 def _build_c2_consistency_tables(df_prompt_analysis):
+    """Summarize C2-symmetry consistency diagnostics for the prompt set."""
     required_cols = ["prompt_idx", "tomo_name", "q1", "q2", "q3", "q4", "f1_mean", "recall_mean"]
     if any(col not in df_prompt_analysis.columns for col in required_cols):
         empty = pd.DataFrame()
@@ -1171,6 +1213,7 @@ def _build_c2_consistency_tables(df_prompt_analysis):
 
 
 def _plot_causal_rotation_checks(df_permutation_samples, df_permutation_summary, df_c2_pairs, analysis_dir):
+    """Plot the adjusted rotation-check diagnostics."""
     has_perm = len(df_permutation_samples) > 0 and df_permutation_samples["delta_r2"].notna().any()
     has_pairs = len(df_c2_pairs) > 0
     if not has_perm and not has_pairs:
@@ -1223,6 +1266,7 @@ def _plot_causal_rotation_checks(df_permutation_samples, df_permutation_summary,
 
 
 def _summarize_causal_findings(df_model_summary, df_permutation_summary, df_c2_summary, df_c2_diagnostics):
+    """Summarize the adjusted rotation analysis into compact findings."""
     if len(df_model_summary) == 0:
         return
 
@@ -1283,6 +1327,7 @@ def _summarize_causal_findings(df_model_summary, df_permutation_summary, df_c2_s
 
 
 def _run_pca_and_clustering(df_prompt_analysis):
+    """Run PCA, scaling, and clustering on the selected prompt features."""
     cluster_features = [
         "c2_axis_to_global_z_deg",
         "c2_rotation_nn_deg",
@@ -1356,6 +1401,7 @@ def _run_pca_and_clustering(df_prompt_analysis):
 
 
 def _plot_overview(df_prompt_analysis, df_corr, analysis_dir):
+    """Create overview plots for prompt performance and descriptive features."""
     sns.set_theme(style="whitegrid")
 
     fig, axes = plt.subplots(2, 3, figsize=(24, 12))
@@ -1512,6 +1558,7 @@ def _plot_overview(df_prompt_analysis, df_corr, analysis_dir):
 
 
 def _plot_pca_clusters(df_clustered, cluster_summary, cluster_features, spectra_by_prompt, df_prompt_analysis, analysis_dir):
+    """Plot PCA embeddings together with the derived prompt clusters."""
     fig, axes = plt.subplots(2, 2, figsize=(17, 12))
 
     scatter = axes[0, 0].scatter(
@@ -1593,6 +1640,7 @@ def _plot_pca_clusters(df_clustered, cluster_summary, cluster_features, spectra_
 
 
 def _summarize_findings(df_prompt_analysis, df_corr, cluster_summary, checkpoint_type, increment):
+    """Summarize the main prompt-analysis findings for notebook display."""
     print("=" * 90)
     print("CRYOET THEORY-GUIDED INTERPRETATION")
     print("=" * 90)
@@ -1607,6 +1655,7 @@ def _summarize_findings(df_prompt_analysis, df_corr, cluster_summary, checkpoint
     print("  - missing_wedge_anisotropy is a post-reconstruction Fourier proxy, not the exact acquisition operator.")
 
     def _print_top(group_name):
+        """Print the top or bottom rows of a dataframe for quick inspection."""
         subset = df_corr[df_corr["feature_group"] == group_name]
         if len(subset) == 0:
             return
@@ -1711,6 +1760,7 @@ def run_rotational_issues_analysis(
     increment=16,
     prompt_size=37,
 ):
+    """Execute the full EXP4 rotational prompt-failure analysis pipeline."""
     del prompt_size  # prompt size is currently implicit in the extracted subtomograms
 
     results_dir = Path(results_dir)

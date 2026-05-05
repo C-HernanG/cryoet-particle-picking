@@ -20,25 +20,25 @@ import shutil
 import sys
 import os
 
-# Add paths BEFORE any project imports
+# Configure import paths before project imports.
 SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
 PROJECT_ROOT = os.path.dirname(os.path.dirname(os.path.dirname(SCRIPT_DIR)))
 PROPICKER_DIR = os.path.join(PROJECT_ROOT, "tools", "ProPicker")
 
-# Add ProPicker tools to path (for utils, data, etc.)
+# Expose ProPicker internals to local imports.
 sys.path.insert(0, PROPICKER_DIR)
 os.chdir(PROPICKER_DIR)
 
-# Add project root to path for paths.py
+# Expose the repository root for shared path definitions.
 sys.path.insert(0, PROJECT_ROOT)
 
-# Add experiments to path for config import
+# Expose shared experiment configuration modules.
 sys.path.insert(0, os.path.join(PROJECT_ROOT, "experiments"))
 
-# Now import project modules
+# Import project modules after the path setup.
 
 # =============================================================================
-# CONFIGURATION
+# Configuration
 # =============================================================================
 
 # Tomograms to test (use validation set from fine-tuning)
@@ -65,7 +65,7 @@ batch_size = 16
 tmp_dir = os.path.join(FINETUNING_DIR, "test")
 
 # =============================================================================
-# HELPER FUNCTIONS
+# Helper functions
 # =============================================================================
 
 
@@ -97,7 +97,7 @@ def find_best_checkpoint(finetuning_dir):
     return ckpts[-1]
 
 # =============================================================================
-# MAIN SCRIPT
+# Main entry point
 # =============================================================================
 
 

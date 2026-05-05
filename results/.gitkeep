@@ -7,5 +7,7 @@ This directory contains experiment outputs including:
 - Evaluation metrics
 
 Results are organized by experiment:
-- `exp2_empiar10988_finetuning/` - EMPIAR-10988 fine-tuning outputs
-- `exp3_umusynth_thy/` - UMU synthetic thyroglobulin fine-tuning outputs
+- `exp1_empiar10988_ribo/` - EMPIAR-10988 ribosome outputs
+- `exp2_polnet_thy/` - PolNet-generated synthetic thyroglobulin baseline outputs
+- `exp3_ppicker_limits/` - incremental fine-tuning outputs
+- `exp4_ppicker_rotations/` - prompt robustness and rotation-analysis outputs

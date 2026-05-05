@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-Inference script for ProPicker fine-tuned on UMU Synthetic Thyroglobulin dataset.
+Inference script for ProPicker fine-tuned on PolNet-generated synthetic Thyroglobulin dataset.
 Adapted for EXP3: evaluates checkpoints from all training increments.
 
 This script runs inference on the validation set using checkpoints from each
@@ -12,10 +12,10 @@ Usage:
     conda activate deepetpicker
     
     # Run inference on all increments:
-    python ../../experiments/exp3_ppicker_limits/scripts/umusynth_inference.py
+    python ../../experiments/exp3_ppicker_limits/scripts/polnet_inference.py
     
     # Run inference on a specific increment:
-    python ../../experiments/exp3_ppicker_limits/scripts/umusynth_inference.py --increment 4
+    python ../../experiments/exp3_ppicker_limits/scripts/polnet_inference.py --increment 4
 """
 
 import sys
@@ -26,27 +26,27 @@ import glob
 import argparse
 import importlib.util
 
-# Add paths BEFORE any project imports
+# Configure import paths before project imports.
 SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
 PROJECT_ROOT = os.path.dirname(os.path.dirname(os.path.dirname(SCRIPT_DIR)))
 PROPICKER_DIR = os.path.join(PROJECT_ROOT, "tools", "ProPicker")
 PROPICKER_INNER_DIR = os.path.join(PROPICKER_DIR, "propicker")
 
-# Add ProPicker tools to path (for utils.mrctools)
+# Expose ProPicker internals to local imports.
 sys.path.insert(0, PROPICKER_INNER_DIR)
 os.chdir(PROPICKER_INNER_DIR)
 
-# Add project root to path for paths.py
+# Expose the repository root for shared path definitions.
 sys.path.insert(0, PROJECT_ROOT)
 
-# Add experiments to path for config import
+# Expose shared experiment configuration modules.
 sys.path.insert(0, os.path.join(PROJECT_ROOT, "experiments"))
 
-# Now import project modules
+# Import project modules after the path setup.
 from utils.mrctools import load_mrc_data, save_mrc_data
 from paths import (
     PROPICKER_MODEL_FILE,
-    UMU_SYNTH_TOMOS_DIR,
+    POLNET_SYNTH_TOMOS_DIR,
     EXP3_RESULTS_DIR,
     EXP3_FINETUNING_DIR,
     EXP3_CHECKPOINTS_DIR,
@@ -57,7 +57,7 @@ from experiments.config import (
 )
 
 # =============================================================================
-# CONFIGURATION
+# Configuration
 # =============================================================================
 
 # Validation tomograms to test
@@ -65,7 +65,7 @@ test_tomos = EXP3_VAL_TOMOS
 
 # Default prompt embedding file (can be overridden with --prompt-file)
 DEFAULT_PROMPT_FILE = os.path.join(
-    str(EXP3_RESULTS_DIR), "fixed_prompts_umusynth_thy.json")
+    str(EXP3_RESULTS_DIR), "fixed_prompts_polnet_thy.json")
 
 # Will be set from command line or default
 prompt_embed_file = DEFAULT_PROMPT_FILE
@@ -79,7 +79,7 @@ output_suffix = ""
 
 
 # =============================================================================
-# HELPER FUNCTIONS
+# Helper functions
 # =============================================================================
 
 
@@ -115,13 +115,13 @@ def run_inference_for_increment(n_train_tomos, force=False, result_suffix=""):
     # Check if already done
     coords_check_dir = os.path.join(results_output_dir, "PredictedLabels", "Coords_All")
     if not force and os.path.exists(coords_check_dir) and len(os.listdir(coords_check_dir)) > 0:
-        print(f"✅ Inference results already exist in: {results_output_dir}")
+        print(f" Inference results already exist in: {results_output_dir}")
         print("   Skipping (use --force to re-run)")
         return results_output_dir
     
     # Check prerequisites
     if not os.path.exists(ckpt_file):
-        print(f"❌ Checkpoint not found: {ckpt_file}")
+        print(f" Checkpoint not found: {ckpt_file}")
         return None
     
     if not os.path.exists(train_cfg_file):
@@ -130,7 +130,7 @@ def run_inference_for_increment(n_train_tomos, force=False, result_suffix=""):
         if os.path.exists(alt_cfg):
             train_cfg_file = alt_cfg
         else:
-            print(f"❌ Training config not found: {train_cfg_file}")
+            print(f" Training config not found: {train_cfg_file}")
             return None
     
     print(f"  Checkpoint: {ckpt_file}")
@@ -147,7 +147,7 @@ def run_inference_for_increment(n_train_tomos, force=False, result_suffix=""):
     print(f"\nPreparing {len(test_tomos)} test tomograms...")
     for tomo_name in test_tomos:
         print(f"  Loading {tomo_name}...")
-        tomo_file = os.path.join(str(UMU_SYNTH_TOMOS_DIR), f"{tomo_name}.mrc")
+        tomo_file = os.path.join(str(POLNET_SYNTH_TOMOS_DIR), f"{tomo_name}.mrc")
         # Invert contrast (same as training)
         tomo = -1 * load_mrc_data(tomo_file).float()
         save_mrc_data(tomo, f"{tmp_dir}/raw_data/{tomo_name}.mrc")
@@ -160,7 +160,7 @@ def run_inference_for_increment(n_train_tomos, force=False, result_suffix=""):
     
     lines = [
         "pre_config={",
-        f'"dset_name": "umusynth_test_inc{n_train_tomos}",',
+        f'"dset_name": "polnet_test_inc{n_train_tomos}",',
         f'"base_path": "{tmp_dir}",',
         f'"tomo_path": "{tmp_dir}/raw_data",',
         f'"tomo_format": ".mrc",',
@@ -220,7 +220,7 @@ def run_inference_for_increment(n_train_tomos, force=False, result_suffix=""):
     
     # Copy results to organized directory (per increment)
     # DeepETPicker saves results in: EXP3_CHECKPOINTS_DIR/PredictedLabels/ and EXP3_CHECKPOINTS_DIR/full_segmentation_output/
-    print(f"\n📁 Copying results to: {results_output_dir}")
+    print(f"\n Copying results to: {results_output_dir}")
     os.makedirs(results_output_dir, exist_ok=True)
     
     # Copy PredictedLabels
@@ -231,7 +231,7 @@ def run_inference_for_increment(n_train_tomos, force=False, result_suffix=""):
             shutil.rmtree(dst_predicted)
         shutil.copytree(src_predicted, dst_predicted)
         shutil.rmtree(src_predicted)
-        print(f"   ✅ PredictedLabels copied")
+        print(f"    PredictedLabels copied")
     
     # Copy full_segmentation_output
     src_segmentation = os.path.join(str(EXP3_CHECKPOINTS_DIR), "full_segmentation_output")
@@ -241,7 +241,7 @@ def run_inference_for_increment(n_train_tomos, force=False, result_suffix=""):
             shutil.rmtree(dst_segmentation)
         shutil.copytree(src_segmentation, dst_segmentation)
         shutil.rmtree(src_segmentation)
-        print(f"   ✅ full_segmentation_output copied")
+        print(f"    full_segmentation_output copied")
     
     # Cleanup
     print("\nCleaning up...")
@@ -250,13 +250,13 @@ def run_inference_for_increment(n_train_tomos, force=False, result_suffix=""):
     if os.path.exists(f"{tmp_dir}/data_std"):
         shutil.rmtree(f"{tmp_dir}/data_std")
     
-    print(f"✅ Inference complete for increment {n_train_tomos}")
-    print(f"📁 Results saved to: {results_output_dir}")
+    print(f" Inference complete for increment {n_train_tomos}")
+    print(f" Results saved to: {results_output_dir}")
     return results_output_dir
 
 
 # =============================================================================
-# MAIN SCRIPT
+# Main entry point
 # =============================================================================
 
 if __name__ == "__main__":
@@ -270,7 +270,7 @@ if __name__ == "__main__":
         help="Re-run inference even if results exist")
     parser.add_argument(
         "--prompt-file", type=str, default=None,
-        help="Custom prompt embedding file (JSON). Default uses fixed_prompts_umusynth_thy.json")
+        help="Custom prompt embedding file (JSON). Default uses fixed_prompts_polnet_thy.json")
     parser.add_argument(
         "--output-suffix", type=str, default="",
         help="Suffix to add to output directory (e.g., 'multi_prompt_n10')")
@@ -283,7 +283,7 @@ if __name__ == "__main__":
     # Set prompt file from arguments
     if args.prompt_file is not None:
         prompt_embed_file = args.prompt_file
-        print(f"\n📌 Using custom prompt file: {prompt_embed_file}")
+        print(f"\n Using custom prompt file: {prompt_embed_file}")
     else:
         prompt_embed_file = DEFAULT_PROMPT_FILE
     
@@ -307,28 +307,28 @@ if __name__ == "__main__":
             # Default: use fixed prompts as single prompt
             result_suffix = "single_prompt"
     
-    print(f"📌 Results will be saved to: results_{result_suffix}/")
+    print(f" Results will be saved to: results_{result_suffix}/")
     
     # Check prerequisites
     if not os.path.exists(prompt_embed_file):
-        print(f"\n❌ ERROR: Prompt embeddings not found: {prompt_embed_file}")
+        print(f"\n ERROR: Prompt embeddings not found: {prompt_embed_file}")
         sys.exit(1)
     
-    print(f"\n✅ Prerequisites found")
+    print(f"\n Prerequisites found")
     print(f"  Prompt embeddings: {prompt_embed_file}")
     print(f"  Test tomograms: {test_tomos}")
     
     # Determine which increments to evaluate
     if args.increment is not None:
         if args.increment not in EXP3_INCREMENTS:
-            print(f"\n❌ ERROR: Invalid increment {args.increment}")
+            print(f"\n ERROR: Invalid increment {args.increment}")
             print(f"   Valid increments: {EXP3_INCREMENTS}")
             sys.exit(1)
         increments_to_run = [args.increment]
     else:
         increments_to_run = EXP3_INCREMENTS
     
-    print(f"\n📋 Increments to evaluate: {increments_to_run}")
+    print(f"\n Increments to evaluate: {increments_to_run}")
     
     # Run inference for each increment
     results = {}
@@ -342,11 +342,11 @@ if __name__ == "__main__":
     print("=" * 70)
     
     for n_tomos, result_dir in results.items():
-        status = "✅" if result_dir else "❌"
+        status = "" if result_dir else ""
         print(f"  {status} Increment {n_tomos:2d}: {result_dir or 'FAILED'}")
     
     results_path = os.path.join(str(EXP3_CHECKPOINTS_DIR), f"results_{result_suffix}")
-    print(f"\n📁 Results saved to: {results_path}")
+    print(f"\n Results saved to: {results_path}")
     print("   - PredictedLabels/Coords_All/")
     print("   - full_segmentation_output/")
     print("\nNext step: Analyze results in the notebook")

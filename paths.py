@@ -33,7 +33,7 @@ RESULTS_DIR = PROJECT_ROOT / "results"
 DATASETS_DIR = DATA_DIR
 
 # Synthetic datasets
-UMU_SYNTH_DIR = DATASETS_DIR / "umu_synth"
+POLNET_SYNTH_DIR = DATASETS_DIR / "polnet_synth"
 
 # =============================================================================
 # Tools
@@ -55,12 +55,12 @@ TOMOTWIN_MODEL_FILE = MODELS_DIR / "tomotwin.pth"
 # TOMOTWIN_MODEL_FILE = PROPICKER_TOOLS_DIR / "tomotwin.pth"
 
 # =============================================================================
-# UMU Synthetic Thyroglobulin Dataset Paths
+# PolNet-generated synthetic Thyroglobulin Dataset Paths
 # =============================================================================
 
-UMU_SYNTH_TOMOS_DIR = UMU_SYNTH_DIR / "tomos"
-UMU_SYNTH_LABELS_DIR = UMU_SYNTH_DIR / "thyroglobulin_labels"
-UMU_SYNTH_CSV = UMU_SYNTH_DIR / "tomos_motif_list.csv"
+POLNET_SYNTH_TOMOS_DIR = POLNET_SYNTH_DIR / "tomos"
+POLNET_SYNTH_LABELS_DIR = POLNET_SYNTH_DIR / "thyroglobulin_labels"
+POLNET_SYNTH_CSV = POLNET_SYNTH_DIR / "tomos_motif_list.csv"
 
 # =============================================================================
 # EMPIAR-10988 Dataset Path
@@ -80,8 +80,8 @@ EXP1_FINETUNING_DIR = EXP1_RESULTS_DIR / "fine_tuning"
 EXP1_INFERENCE_DIR = EXP1_RESULTS_DIR / "inference"
 EXP1_COORDS_DIR = EXP1_RESULTS_DIR / "coords"
 
-# Experiment 2: UMU Synthetic Thyroglobulin
-EXP2_RESULTS_DIR = RESULTS_DIR / "exp2_umusynth_thy"
+# Experiment 2: PolNet-generated synthetic Thyroglobulin
+EXP2_RESULTS_DIR = RESULTS_DIR / "exp2_polnet_thy"
 EXP2_DATA_DIR = EXP2_RESULTS_DIR / "data"
 EXP2_FINETUNING_DIR = EXP2_RESULTS_DIR / "fine_tuning"
 EXP2_INFERENCE_DIR = EXP2_RESULTS_DIR / "inference"

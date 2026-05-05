@@ -34,28 +34,28 @@ import shutil
 import sys
 import os
 
-# Add paths BEFORE any project imports
+# Configure import paths before project imports.
 SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
 PROJECT_ROOT = os.path.dirname(os.path.dirname(os.path.dirname(SCRIPT_DIR)))
 PROPICKER_DIR = os.path.join(PROJECT_ROOT, "tools", "ProPicker")
 
-# Add ProPicker tools to path (for utils, data, etc.)
+# Expose ProPicker internals to local imports.
 sys.path.insert(0, PROPICKER_DIR)
 os.chdir(PROPICKER_DIR)
 
-# Add project root to path for paths.py
+# Expose the repository root for shared path definitions.
 sys.path.insert(0, PROJECT_ROOT)
 
-# Add experiments to path for config import
+# Expose shared experiment configuration modules.
 sys.path.insert(0, os.path.join(PROJECT_ROOT, "experiments"))
 
-# Now import project modules
+# Import project modules after the path setup.
 
-# Disable warnings for chained assignments in pandas
+# Disable warnings for chained assignments in pandas.
 pd.options.mode.chained_assignment = None
 
 # =============================================================================
-# CONFIGURATION (from config.py)
+# Configuration
 # =============================================================================
 
 train_ts = EXP1_TRAIN_TS
@@ -74,7 +74,7 @@ prompt_embed_file = os.path.join(
     str(EXP1_RESULTS_DIR), "fixed_prompts_empiar10988.json")
 
 # =============================================================================
-# MAIN SCRIPT
+# Main entry point
 # =============================================================================
 
 if __name__ == "__main__":
@@ -84,11 +84,11 @@ if __name__ == "__main__":
 
     # Check prerequisites
     if not os.path.exists(prompt_embed_file):
-        print(f"\n❌ ERROR: Prompt embeddings not found: {prompt_embed_file}")
+        print(f"\n ERROR: Prompt embeddings not found: {prompt_embed_file}")
         print("Please run the preprocessing notebook first!")
         sys.exit(1)
 
-    print(f"\n✅ Prerequisites found")
+    print(f"\n Prerequisites found")
     print(f"  Prompt embeddings: {prompt_embed_file}")
     print(f"  EMPIAR10988 data: {EMPIAR10988_BASE_DIR}")
 
@@ -116,7 +116,7 @@ if __name__ == "__main__":
         # Load tomogram
         tomo_file = f"{EMPIAR10988_BASE_DIR}/tomograms/{ts_id}.rec"
         slice_of_interest = empiar10988_ts_to_slice_of_interest[ts_id]
-        # IMPORTANT: tomogram has to be scaled to contrast 'white particles on dark background'!
+        # Tomogram has to be scaled to contrast 'white particles on dark background'
         tomo = -1 * load_mrc_data(tomo_file).float()[slice_of_interest]
 
         # Setup cropping function for tomogram (and binary labels)
@@ -131,6 +131,7 @@ if __name__ == "__main__":
         z_limit = [max(0, z_limit[0]), min(z_limit[1], tomo.shape[0])]
 
         def crop_tomo_fn(tomo):
+            """Crop a tomogram or label volume to the configured center window."""
             return tomo[
                 z_limit[0]:z_limit[1],
                 y_limit[0]:y_limit[1],

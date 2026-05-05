@@ -1,12 +1,12 @@
 #!/usr/bin/env python3
 """
-Inference script for ProPicker fine-tuned on UMU Synthetic Thyroglobulin dataset.
+Inference script for ProPicker fine-tuned on PolNet-generated synthetic Thyroglobulin dataset.
 Based on empiar10988_inference.py
 
 Usage:
     cd /path/to/cryoet-particle-picking/tools/ProPicker
     conda activate deepetpicker
-    python ../../experiments/exp2_umusynth_thy/scripts/umusynth_inference.py
+    python ../../experiments/exp2_polnet_thy/scripts/polnet_inference.py
 """
 
 import sys
@@ -16,30 +16,30 @@ import copy
 import glob
 import importlib.util
 
-# Add paths BEFORE any project imports
+# Configure import paths before project imports.
 SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
 PROJECT_ROOT = os.path.dirname(os.path.dirname(os.path.dirname(SCRIPT_DIR)))
 PROPICKER_DIR = os.path.join(PROJECT_ROOT, "tools", "ProPicker")
 PROPICKER_INNER_DIR = os.path.join(PROPICKER_DIR, "propicker")
 
-# Add ProPicker tools to path (for utils.mrctools)
-# DeepETPicker_ProPicker is inside propicker/, so we need to chdir there
+# Expose ProPicker internals to local imports.
+# Run from the nested ProPicker package expected by DeepETPicker helpers.
 sys.path.insert(0, PROPICKER_INNER_DIR)
 os.chdir(PROPICKER_INNER_DIR)
 
-# Add project root to path for paths.py
+# Expose the repository root for shared path definitions.
 sys.path.insert(0, PROJECT_ROOT)
 
-# Add experiments to path for config import
+# Expose shared experiment configuration modules.
 sys.path.insert(0, os.path.join(PROJECT_ROOT, "experiments"))
 
-# Now import project modules
+# Import project modules after the path setup.
 from utils.mrctools import load_mrc_data, save_mrc_data
-from paths import PROPICKER_MODEL_FILE, UMU_SYNTH_TOMOS_DIR, EXP2_RESULTS_DIR, EXP2_INFERENCE_DIR
+from paths import PROPICKER_MODEL_FILE, POLNET_SYNTH_TOMOS_DIR, EXP2_RESULTS_DIR, EXP2_INFERENCE_DIR
 from experiments.config import EXP2_VAL_TOMOS
 
 # =============================================================================
-# CONFIGURATION (imported from experiments.config)
+# Configuration
 # =============================================================================
 
 # Tomograms to test (use validation set from fine-tuning)
@@ -56,7 +56,7 @@ train_cfg_file = os.path.join(FINETUNING_DIR, "configs", "train.py")
 
 # Prompt embedding file
 prompt_embed_file = os.path.join(
-    str(EXP2_RESULTS_DIR), "fixed_prompts_umusynth_thy.json")
+    str(EXP2_RESULTS_DIR), "fixed_prompts_polnet_thy.json")
 
 # Inference parameters
 gpu = 0
@@ -66,7 +66,7 @@ batch_size = 2
 tmp_dir = os.path.join(FINETUNING_DIR, "test")
 
 # =============================================================================
-# HELPER FUNCTIONS
+# Helper functions
 # =============================================================================
 
 
@@ -99,13 +99,13 @@ def find_best_checkpoint(finetuning_dir):
     return ckpts[-1]
 
 # =============================================================================
-# MAIN SCRIPT
+# Main entry point
 # =============================================================================
 
 
 if __name__ == "__main__":
     print("=" * 70)
-    print("ProPicker Inference on UMU Synthetic Thyroglobulin Dataset")
+    print("ProPicker Inference on PolNet-generated synthetic Thyroglobulin Dataset")
     print("=" * 70)
 
     # Find checkpoint if not specified
@@ -134,7 +134,7 @@ if __name__ == "__main__":
     # Load and save test data (same preprocessing as empiar10988)
     for tomo_name in test_tomos:
         print(f"  Loading {tomo_name}...")
-        tomo_file = os.path.join(str(UMU_SYNTH_TOMOS_DIR), f"{tomo_name}.mrc")
+        tomo_file = os.path.join(str(POLNET_SYNTH_TOMOS_DIR), f"{tomo_name}.mrc")
         # Invert contrast (same as training)
         tomo = -1 * load_mrc_data(tomo_file).float()
         save_mrc_data(tomo, f"{tmp_dir}/raw_data/{tomo_name}.mrc")
@@ -147,7 +147,7 @@ if __name__ == "__main__":
 
     lines = [
         "pre_config={",
-        f'"dset_name": "umusynth_test",',
+        f'"dset_name": "polnet_test",',
         f'"base_path": "{tmp_dir}",',
         f'"tomo_path": "{tmp_dir}/raw_data",',
         f'"tomo_format": ".mrc",',
