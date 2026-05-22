@@ -137,12 +137,12 @@ lightning_logs/
 # ===========================================
 docs/HernanGuirao_Carlos_TFG_CryoET_UniversalDetectors.fls
 docs/HernanGuirao_Carlos_TFG_CryoET_UniversalDetectors.fdb_latexmk
-docs/HernanGuirao_Carlos_TFG_CryoET_UniversalDetectors.tex
 docs/HernanGuirao_Carlos_TFG_CryoET_UniversalDetectors.aux
+docs/HernanGuirao_Carlos_TFG_CryoET_UniversalDetectors.tex
 docs/HernanGuirao_Carlos_TFG_CryoET_UniversalDetectors.lof
 docs/HernanGuirao_Carlos_TFG_CryoET_UniversalDetectors.log
 docs/HernanGuirao_Carlos_TFG_CryoET_UniversalDetectors.lot
 docs/HernanGuirao_Carlos_TFG_CryoET_UniversalDetectors.out
 docs/HernanGuirao_Carlos_TFG_CryoET_UniversalDetectors.toc
-docs/assets/*
+docs/assets/
 docs/style/*
