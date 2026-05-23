@@ -1,6 +1,6 @@
 # Universal Deep Learning Detectors for Macromolecule Localization in Cryo-ET
 
-This repository contains the experimental code, notebooks and thesis material for a ProPicker-based study of promptable cryo-ET particle picking. The work combines one real-data proof of concept and a controlled synthetic benchmark to study four questions:
+This repository contains the experimental code, notebooks and work material for a ProPicker-based study of promptable cryo-ET particle picking. The work combines one real-data proof of concept and a controlled synthetic benchmark to study four questions:
 
 1. Whether prompt-only transfer is useful on real data.
 2. How strongly domain shift degrades performance.
@@ -34,7 +34,7 @@ cryoet-particle-picking/
 ├── README.md
 ├── paths.py
 ├── data/                          # Local datasets, not tracked by git
-├── docs/                          # Thesis, figures, PDFs, and supporting material
+├── docs/                          # Work, figures, PDFs, and supporting material
 ├── experiments/
 │   ├── README.md
 │   ├── config.py
@@ -54,7 +54,7 @@ Important directories:
 - `experiments/config.py`: shared constants and helper utilities reused across experiments.
 - `experiments/<exp>/`: experiment-specific notebooks, scripts and sometimes local configuration.
 - `results/`: generated prompts, coordinates, inference outputs, plots and checkpoints.
-- `docs/`: thesis source, final PDF, figures extracted from experiments and supporting documentation.
+- `docs/`: work source, final PDF, figures extracted from experiments and supporting documentation.
 
 ## Setup
 
@@ -166,12 +166,9 @@ Keeping filenames stable matters because later analysis notebooks read these fil
 
 ## Documentation
 
-The thesis material lives in `docs/`. The repository keeps the compiled manuscript and exported figures; the local LaTeX working source is ignored in Git.
-
-Key files:
+The work material lives in `docs/`.
 
 - [docs/HernanGuirao_Carlos_TFG_CryoET_UniversalDetectors.pdf](docs/HernanGuirao_Carlos_TFG_CryoET_UniversalDetectors.pdf)
-- `docs/assets/figures/results/`: figures exported from the experiment notebooks
 
 ## Reproducibility Notes
 
